@@ -1,0 +1,25 @@
+{
+  "name": "delorean-server",
+  "version": "0.1.0",
+  "description": "Basic Express backend for the DeLorean prototype",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+  },
+  "keywords": [
+    "delorean",
+    "canvas",
+    "socket",
+    "api"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
