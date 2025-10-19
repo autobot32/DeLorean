@@ -1,5 +1,9 @@
-const fs = require('fs');
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+const { summarizeMemories } = require('./ai/gemini');
+const { synthesizeToFile } = require('./audio/voice');
+
+const fs = require('fs');
 const { randomUUID } = require('crypto');
 const express = require('express');
 const cors = require('cors');
@@ -14,8 +18,10 @@ const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DATA_FILE = path.join(DATA_DIR, 'uploads.json');
 
+const AUDIO_DIR = path.join(__dirname, '..', 'audio');
+
 function ensureDirectories() {
-  [UPLOADS_DIR, DATA_DIR].forEach((dir) => {
+  [UPLOADS_DIR, DATA_DIR, AUDIO_DIR].forEach((dir) => {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
@@ -32,6 +38,7 @@ const app = express();
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 app.use('/uploads', express.static(UPLOADS_DIR));
+app.use('/audio', express.static(AUDIO_DIR));
 
 const storage = multer.memoryStorage();
 const upload = multer({
