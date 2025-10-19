@@ -328,26 +328,50 @@ app.post('/api/echo', (req, res) => {
 });
 
 app.post('/api/story', async (req, res) => {
+  const memories = Array.isArray(req.body?.memories) ? req.body.memories : [];
+  const fallbackStory = 'Placeholder memory narrative coming soon.';
+
   try {
-    const story = await summarizeMemories(req.body.memories || []);
-    res.json({ story });
+    if (!memories.length) {
+      return res.json({ story: fallbackStory, placeholder: true });
+    }
+
+    const story = await summarizeMemories(memories);
+    return res.json({ story, placeholder: false });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Gemini request failed' });
+    console.warn('Gemini request failed, returning placeholder story:', error);
+    return res.json({ story: fallbackStory, placeholder: true });
   }
 });
 
 app.post('/api/narrate', async (req, res) => {
+  const memories = Array.isArray(req.body?.memories) ? req.body.memories : [];
+  const fallbackStory = 'Placeholder memory narrative coming soon.';
+  let story = fallbackStory;
+  let usedPlaceholder = true;
+
   try {
-    const story = await summarizeMemories(req.body.memories || []);
-    const audioPath = await synthesizeToFile(story, Date.now().toString());
-    res.json({ story, audio: `/audio/${path.basename(audioPath)}` });
+    if (memories.length) {
+      story = await summarizeMemories(memories);
+      usedPlaceholder = false;
+    }
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Narration failed' });
+    console.warn('Gemini request failed, falling back to placeholder narration:', error);
+  }
+
+  try {
+    const clipId = randomUUID();
+    const audioPath = await synthesizeToFile(story, clipId);
+    return res.json({
+      story,
+      audio: `/audio/${path.basename(audioPath)}`,
+      placeholder: usedPlaceholder,
+    });
+  } catch (error) {
+    console.error('Narration failed:', error);
+    return res.status(500).json({ error: error.message || 'Narration failed.' });
   }
 });
-
 
 app.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {

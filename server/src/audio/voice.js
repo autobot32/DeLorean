@@ -3,7 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const { ElevenLabsClient } = require('@elevenlabs/elevenlabs-js');
 
-const VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL'; // sample voice
+const DEFAULT_VOICE_ID = 'EXAVITQu4vr4xnSDxMaL'; // ElevenLabs "Bella" voice
+const rawVoiceId = (process.env.ELEVENLABS_VOICE_ID || '').trim();
+const VOICE_ID = rawVoiceId && !rawVoiceId.startsWith('your-') ? rawVoiceId : DEFAULT_VOICE_ID;
 const hasElevenLabsKey = Boolean(process.env.ELEVENLABS_API_KEY);
 const elevenLabs = hasElevenLabsKey
   ? new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY })
