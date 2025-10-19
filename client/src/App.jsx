@@ -1,5 +1,5 @@
 import TunnelSandbox from './three/TunnelSandbox'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 function App() {
   // Local-only state for previewing memories
@@ -45,6 +45,8 @@ function App() {
   const [overlayFading, setOverlayFading] = useState(false)
   const [draftBatch, setDraftBatch] = useState([]) // [{ id, file, objectUrl, name, lastModified, context }]
   const API_BASE = (import.meta?.env?.VITE_API_BASE || 'http://localhost:4000').replace(/\/$/,'')
+
+  const hasMemories = useMemo(() => memories.some((m) => !!(m?.url || m?.objectUrl)), [memories])
 
   useEffect(() => {
     return () => {
@@ -495,7 +497,8 @@ function addFiles(files){
 
       const activeTunnelId = options?.tunnelId || null
 
-      const results = await Promise.all(items.map(async ({ id, context }) => {
+      const results = []
+      for (const { id, context } of items) {
         const baseUrl = `${API_BASE}/api/uploads/${encodeURIComponent(id)}/story`
         const storyUrl = activeTunnelId
           ? `${baseUrl}?tunnelId=${encodeURIComponent(activeTunnelId)}`
@@ -506,8 +509,8 @@ function addFiles(files){
           body: JSON.stringify({ context: context || '' }),
         })
         if (!res.ok) throw new Error(`Story request failed: ${res.status}`)
-        return res.json().catch(() => null)
-      }))
+        results.push(await res.json().catch(() => null))
+      }
 
       return results
     }catch(err){
@@ -693,7 +696,7 @@ function addFiles(files){
         <div className="animate-float absolute right-[-6rem] top-[20%] h-[36vh] w-[36vh] rounded-full opacity-25 blur-3xl bg-[radial-gradient(circle_at_70%_70%,#00EAFF,transparent_60%)]"></div>
       </div>
       {/* Header */}
-      <div className="sticky top-3 z-10">
+      <div className="relative z-10 mb-4">
         <div className="mx-auto max-w-6xl px-2">
           <div className="flex items-center justify-between rounded-2xl border border-slate-200/80 bg-white/80 px-4 py-3 backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/60">
             <div className="font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-neon-cyan via-neon-pink to-neon-violet">DeLorean</div>
@@ -720,18 +723,18 @@ function addFiles(files){
           <h1 className="reveal m-0 text-8xl sm:text-9xl font-extrabold leading-tight tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-neon-cyan via-neon-pink to-neon-violet">DeLorean</h1>
 
           {/* Down arrow to Step Back Through Time */}
-          <div className="reveal delay-200 mt-12 flex justify-center">
+          <div className="reveal delay-200 mt-8 flex justify-center">
             <ArrowDown />
           </div>
 
           {/* Step Back Through Time section (no extra buttons) */}
-          <div id="step" className="reveal delay-300 mt-10 min-h-[60vh] flex flex-col items-center justify-center space-y-4">
+          <div id="step" className="reveal delay-300 mt-8 min-h-[50vh] flex flex-col items-center justify-center space-y-3">
             <h2 className="m-0 text-4xl sm:text-5xl font-bold">Step Back Through Time</h2>
             <p className="mx-auto mt-3 max-w-2xl text-lg text-slate-700 dark:text-slate-300">Build a pathway of your memories from the past to present.</p>
           </div>
 
           {/* Arrow to How It Works */}
-          <div className="reveal delay-400 mt-14 flex justify-center">
+          <div className="reveal delay-400 mt-6 flex justify-center">
             <ArrowDown />
           </div>
 
@@ -766,7 +769,7 @@ function addFiles(files){
           </div>
 
           {/* Arrow to CTA */}
-          <div className="reveal delay-400 mt-14 flex justify-center">
+          <div className="reveal delay-400 mt-8 flex justify-center">
             <ArrowDown />
           </div>
 
@@ -781,56 +784,23 @@ function addFiles(files){
 
       {page === 'create' && (
         <section id="create" className="rounded-2xl border border-slate-200/80 bg-white/80 p-6 backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/50">
-          <h2 className="mb-3 text-xl font-semibold">Create New Pathway</h2>
-          <div className="mb-6 rounded-2xl border border-cyan-400/40 bg-gradient-to-br from-white/90 via-cyan-50/80 to-transparent p-5 text-sm text-slate-700 shadow-sm dark:border-cyan-400/30 dark:bg-gradient-to-br dark:from-slate-900/70 dark:via-cyan-900/40 dark:to-transparent dark:text-cyan-100">
-            <h3 className="mb-2 text-base font-semibold text-cyan-800 dark:text-cyan-100">How to craft a great pathway</h3>
-            <ul className="list-disc space-y-2 pl-5">
-              <li><strong>Upload your photos together</strong> so this pathway feels cohesive. You can drag &amp; drop or use the button below.</li>
-              <li><strong>Add a context summary</strong> before uploading. We’ll attach it to every photo so you can fine-tune details later.</li>
-              <li><strong>Review in Memories</strong> once you’re done. Analyze will turn your saved contexts into a narrative you can revisit anytime.</li>
-            </ul>
+          <div className="flex flex-col gap-1 mb-4">
+            <h2 className="text-xl font-semibold">Create New Pathway</h2>
           </div>
 
-          <div className="mb-4 flex flex-col gap-3">
-            <div
-              className={`grid h-64 place-items-center rounded-2xl border-2 border-dashed p-6 text-center transition ${isDropping ? 'border-pink-400/70 bg-pink-50/60 dark:border-pink-400/70 dark:bg-pink-500/10' : 'border-pink-300/50 bg-white/70 dark:border-pink-400/40 dark:bg-slate-900/40'}`}
-              onDragOver={onDragOver}
-              onDragLeave={onDragLeave}
-              onDrop={(e) => {
-                pendingContextRef.current = createContextDraft
-                onDrop(e)
-              }}
-            >
-              <div className="space-y-2">
-                <p className="m-0 text-sm text-slate-600 dark:text-slate-300">Drop photos here or use the button below. All uploads stay on your local server.</p>
-                <button
-                  className="inline-flex items-center justify-center rounded-lg border border-pink-300/50 bg-gradient-to-r from-neon-pink via-neon-violet to-neon-cyan px-4 py-2 text-sm font-semibold text-white shadow hover:ring-2 hover:ring-pink-300/40"
-                  onClick={() => {
-                    pendingContextRef.current = createContextDraft
-                    fileInputRef.current?.click()
-                  }}
-                >
-                  Choose Photos
-                </button>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-slate-200/70 bg-white/80 p-4 dark:border-slate-700 dark:bg-slate-900/50">
-              <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200" htmlFor="create-context">Context for this pathway</label>
-              <textarea
-                id="create-context"
-                rows={4}
-                value={createContextDraft}
-                onChange={(e) => setCreateContextDraft(e.target.value)}
-                placeholder="Describe where, when, who, and why this set of memories matters. We'll prefill new uploads with this context so you can refine in Memories."
-                className="w-full rounded-md border border-slate-300/70 bg-white/90 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-pink-300/40 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-100"
-              />
-            </div>
-          </div>
-
-          {draftBatch.length > 0 && (
-            <div className="rounded-xl border border-slate-200/70 bg-white/80 p-4 dark:border-slate-700 dark:bg-slate-900/50">
-              <h3 className="mb-3 text-base font-semibold">Review &amp; add context per image</h3>
+          <div
+            className={`rounded-2xl border p-4 transition mb-12 ${isDropping ? 'border-dashed border-pink-400/70 bg-pink-50/60 dark:border-pink-400/70 dark:bg-pink-500/10' : 'border-slate-200/70 bg-white/80 dark:border-slate-700 dark:bg-slate-900/50'}`}
+            onDragOver={(e) => {
+              pendingContextRef.current = createContextDraft
+              onDragOver(e)
+            }}
+            onDragLeave={onDragLeave}
+            onDrop={(e) => {
+              pendingContextRef.current = createContextDraft
+              onDrop(e)
+            }}
+          >
+            {draftBatch.length > 0 ? (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {draftBatch.map((draft) => (
                   <article key={draft.id} className="overflow-hidden rounded-lg border border-slate-200/60 bg-white/95 shadow-sm dark:border-slate-700/70 dark:bg-slate-900/70">
@@ -871,97 +841,120 @@ function addFiles(files){
                   </article>
                 ))}
               </div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  disabled={isUploading || isAnalyzing}
-                  onClick={uploadDraftToServerAndAnalyze}
-                  className={`inline-flex items-center rounded-lg border px-4 py-2 text-sm font-semibold shadow-sm ${isUploading || isAnalyzing ? 'opacity-70 cursor-wait' : ''} border-pink-300/40 bg-gradient-to-r from-neon-pink to-neon-violet text-white hover:ring-2 hover:ring-pink-300/30`}
-                  title="Upload images + contexts, generate story, then start the 3D experience"
-                >
-                  {isUploading || isAnalyzing ? 'Analyzing…' : 'Analyze Pathway'}
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
-                  onClick={() => {
-                    draftBatch.forEach(d => d.objectUrl && URL.revokeObjectURL(d.objectUrl))
-                    setDraftBatch([])
-                  }}
-                >
-                  Clear Draft
-                </button>
+            ) : (
+              <div className="flex min-h-[12rem] flex-col items-center justify-center gap-2 text-center text-sm text-slate-600 dark:text-slate-300">
+                <p className="max-w-sm leading-relaxed">Drop images here or use “Add photo(s)” to start building this pathway.</p>
               </div>
-              {(uploadError || analyzeError) && (
-                <div className="mt-3 space-y-1 text-sm">
-                  {uploadError && <p className="text-red-600 dark:text-red-400">{uploadError}</p>}
-                  {analyzeError && <p className="text-red-600 dark:text-red-400">{analyzeError}</p>}
-                </div>
-              )}
+            )}
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              disabled={isUploading || isAnalyzing || draftBatch.length === 0}
+              onClick={uploadDraftToServerAndAnalyze}
+              className={`inline-flex items-center rounded-lg border px-4 py-2 text-sm font-semibold shadow-sm border-pink-300/40 bg-gradient-to-r from-neon-pink to-neon-violet text-white hover:ring-2 hover:ring-pink-300/30 ${isUploading || isAnalyzing || draftBatch.length === 0 ? 'cursor-not-allowed opacity-70' : ''}`}
+              title="Upload images + contexts, generate story, then start the 3D experience"
+            >
+              {isUploading || isAnalyzing ? 'Analyzing…' : 'Analyze Pathway'}
+            </button>
+            <button
+              type="button"
+              className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+              onClick={() => {
+                draftBatch.forEach(d => d.objectUrl && URL.revokeObjectURL(d.objectUrl))
+                setDraftBatch([])
+              }}
+              disabled={draftBatch.length === 0}
+            >
+              Clear Draft
+            </button>
+          </div>
+          {(uploadError || analyzeError) && (
+            <div className="mt-3 space-y-1 text-sm">
+              {uploadError && <p className="text-red-600 dark:text-red-400">{uploadError}</p>}
+              {analyzeError && <p className="text-red-600 dark:text-red-400">{analyzeError}</p>}
             </div>
           )}
 
-          <div className="flex flex-wrap gap-3">
-            <a href="#/memories" className="inline-flex items-center justify-center rounded-lg border border-pink-300/50 bg-gradient-to-r from-neon-pink via-neon-violet to-neon-cyan px-4 py-2 text-white font-semibold shadow hover:ring-2 hover:ring-pink-300/40">View Saved Memories</a>
-            <button className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700" onClick={() => { window.location.hash = '#/memories' }}>Go to Memories Workspace</button>
+          <div className="mt-6 flex justify-center">
+            <button
+              type="button"
+              className="inline-flex items-center justify-center rounded-xl border border-pink-300/50 bg-gradient-to-r from-neon-pink via-neon-violet to-neon-cyan px-6 py-3 text-base font-semibold text-white shadow hover:ring-2 hover:ring-pink-300/40"
+              onClick={() => {
+                pendingContextRef.current = createContextDraft
+                fileInputRef.current?.click()
+              }}
+            >
+              Add photo(s)
+            </button>
           </div>
         </section>
       )}
 
       {page === 'memories' && (
-      <section id="memories" className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-transparent p-5 dark:border-slate-800/80">
-        {/* Starry space background just for this section */}
-        <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(20,28,60,0.9),transparent_70%)] dark:bg-[radial-gradient(ellipse_at_top,rgba(8,10,22,0.9),transparent_70%)]" />
-          <canvas ref={memoriesStarRef} className="absolute inset-0 h-full w-full"></canvas>
-          <div className="absolute inset-0 mix-blend-screen opacity-50" style={{background: 'radial-gradient(1200px 600px at 10% 10%, rgba(255,62,201,0.08), transparent 60%), radial-gradient(800px 400px at 90% 30%, rgba(0,234,255,0.08), transparent 60%)'}} />
-        </div>
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold">Memories Preview</h2>
-          <div className="flex gap-2">
-            <button className="inline-flex items-center rounded-lg border border-cyan-400/40 bg-cyan-100/60 px-3 py-2 text-sm font-semibold text-cyan-900 hover:ring-2 hover:ring-cyan-400/30 dark:border-cyan-400/30 dark:bg-cyan-900/20 dark:text-cyan-200" onClick={clearAll}>Reset</button>
-          </div>
-        </div>
-        <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">Saved pathways appear here. Click a memory to review its details, update the context, or generate a new story.</p>
-        {storyText && (
-          <div className="mb-4 rounded-xl border border-slate-200/70 bg-white/80 p-4 backdrop-blur dark:border-slate-700 dark:bg-slate-900/50">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <h3 className="m-0 text-base font-semibold">Generated Story</h3>
-              <button className="rounded-md border border-slate-300 px-2 py-1 text-xs dark:border-slate-600" onClick={() => setStoryText('')}>Clear</button>
+        hasMemories ? (
+          <section id="memories" className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-transparent p-5 dark:border-slate-800/80">
+            {/* Starry space background just for this section */}
+            <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
+              <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(20,28,60,0.9),transparent_70%)] dark:bg-[radial-gradient(ellipse_at_top,rgba(8,10,22,0.9),transparent_70%)]" />
+              <canvas ref={memoriesStarRef} className="absolute inset-0 h-full w-full"></canvas>
+              <div className="absolute inset-0 mix-blend-screen opacity-50" style={{background: 'radial-gradient(1200px 600px at 10% 10%, rgba(255,62,201,0.08), transparent 60%), radial-gradient(800px 400px at 90% 30%, rgba(0,234,255,0.08), transparent 60%)'}} />
             </div>
-            <div className="whitespace-pre-wrap text-sm text-slate-800 dark:text-slate-200">{storyText}</div>
-          </div>
-        )}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {memories.map((m, index) => (
-            <article key={m.id} className="overflow-hidden rounded-xl border border-slate-200/60 bg-white/5 shadow-sm backdrop-blur-sm dark:border-slate-700/70 dark:bg-slate-900/20">
-              <div className="relative aspect-[16/10] grid place-items-center bg-black/20 dark:bg-black/30" aria-label={m.title} role="img">
-                {m.objectUrl || m.url ? (
-                  <>
-                    <img className="h-full w-full object-cover" src={m.url || m.objectUrl} alt={m.title} />
-                  </>
-                ) : (
-                  <>
-                    <div className="h-[76%] w-[92%] rounded-lg border border-dashed border-pink-300/50 bg-gradient-to-br from-white/10 to-white/5 dark:border-slate-600 dark:from-white/10 dark:to-transparent" aria-hidden="true" />
-                  </>
-                )}
-                <button className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-pink-300/60 bg-white/95 text-slate-900 hover:bg-white dark:border-pink-500 dark:bg-slate-900/80 dark:text-slate-100" onClick={() => removeMemory(m.id)} title="Remove">×</button>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold">Memories Preview</h2>
+              <div className="flex gap-2">
+                <button className="inline-flex items-center rounded-lg border border-cyan-400/40 bg-cyan-100/60 px-3 py-2 text-sm font-semibold text-cyan-900 hover:ring-2 hover:ring-cyan-400/30 dark:border-cyan-400/30 dark:bg-cyan-900/20 dark:text-cyan-200" onClick={clearAll}>Reset</button>
               </div>
-              <div className="flex items-center justify-between gap-2 px-3 py-2">
-                <h4 className="m-0 max-w-[70%] truncate text-sm font-semibold" title={m.title}>{m.title}</h4>
-                {m.meta && <span className="text-xs text-slate-500 dark:text-slate-400">{m.meta}</span>}
+            </div>
+            <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">Saved pathways appear here. Click a memory to review its details, update the context, or generate a new story.</p>
+            {storyText && (
+              <div className="mb-4 rounded-xl border border-slate-200/70 bg-white/80 p-4 backdrop-blur dark:border-slate-700 dark:bg-slate-900/50">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <h3 className="m-0 text-base font-semibold">Generated Story</h3>
+                  <button className="rounded-md border border-slate-300 px-2 py-1 text-xs dark:border-slate-600" onClick={() => setStoryText('')}>Clear</button>
+                </div>
+                <div className="whitespace-pre-wrap text-sm text-slate-800 dark:text-slate-200">{storyText}</div>
               </div>
-              <div className="px-3 pb-3">
-                <button
-                  type="button"
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
-                >
-                  {`${ordinalLabel(index + 1)} Pathway Experience`}
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+            )}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {memories.map((m, index) => (
+                <article key={m.id} className="overflow-hidden rounded-xl border border-slate-200/60 bg-white/5 shadow-sm backdrop-blur-sm dark:border-slate-700/70 dark:bg-slate-900/20">
+                  <div className="relative aspect-[16/10] grid place-items-center bg-black/20 dark:bg-black/30" aria-label={m.title} role="img">
+                    {m.objectUrl || m.url ? (
+                      <>
+                        <img className="h-full w-full object-cover" src={m.url || m.objectUrl} alt={m.title} />
+                      </>
+                    ) : (
+                      <>
+                        <div className="h-[76%] w-[92%] rounded-lg border border-dashed border-pink-300/50 bg-gradient-to-br from-white/10 to-white/5 dark:border-slate-600 dark:from-white/10 dark:to-transparent" aria-hidden="true" />
+                      </>
+                    )}
+                    <button className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-pink-300/60 bg-white/95 text-slate-900 hover:bg-white dark:border-pink-500 dark:bg-slate-900/80 dark:text-slate-100" onClick={() => removeMemory(m.id)} title="Remove">×</button>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 px-3 py-2">
+                    <h4 className="m-0 max-w-[70%] truncate text-sm font-semibold" title={m.title}>{m.title}</h4>
+                    {m.meta && <span className="text-xs text-slate-500 dark:text-slate-400">{m.meta}</span>}
+                  </div>
+                  <div className="px-3 pb-3">
+                    <button
+                      type="button"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                    >
+                      {`${ordinalLabel(index + 1)} Pathway Experience`}
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : (
+          <section id="memories" className="rounded-2xl border border-slate-200/80 bg-white/80 p-10 text-center shadow-sm backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/60">
+            <div className="mx-auto flex max-w-lg flex-col items-center gap-4 text-slate-600 dark:text-slate-300">
+              <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100">Memories Preview</h2>
+              <p className="text-sm leading-relaxed">As you generate pathways, your memories will appear here ready to revisit anytime.</p>
+            </div>
+          </section>
+        )
       )}
 
       
