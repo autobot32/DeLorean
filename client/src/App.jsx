@@ -435,32 +435,7 @@ function App() {
     }
   }
 
-<<<<<<< HEAD
-  return (
-=======
-  async function narrateAll(){
-    try{
-      setAnalyzeError(null)
-      setIsNarrating(true)
-      const items = memories
-        .filter(m => m.id && (prompts[m.id]?.trim() || storyText?.trim()))
-        .map(m => ({ id: m.id, context: (prompts[m.id] || '').trim() }))
-      const res = await fetch(`${API_BASE}/api/narrate`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memories: items })
-      })
-      if (!res.ok) throw new Error(`Narrate failed: ${res.status}`)
-      const data = await res.json()
-      if (typeof data.story === 'string') setStoryText(data.story)
-      if (typeof data.audio === 'string') setStoryAudio(`${API_BASE}${data.audio}`)
-    }catch(err){
-      setAnalyzeError(err.message || 'Narration failed')
-    }finally{
-      setIsNarrating(false)
-    }
-  }
-
   const mainView = (
->>>>>>> 3822bfe (ThreeJS scene is ready)
     <main className="relative min-h-dvh w-full">
       <div className="mx-auto max-w-6xl p-6 space-y-6">
       {/* Animated ambient background */}
@@ -482,12 +457,6 @@ function App() {
                 <a href="#/create" className={(page==='create'?'text-slate-900 dark:text-slate-100 ': '') + 'rounded-md px-2 py-1 hover:text-slate-900 dark:hover:text-slate-100'}>Create New Pathway</a>
                 <a href="#/memories" className={(page==='memories'?'text-slate-900 dark:text-slate-100 ': '') + 'rounded-md px-2 py-1 hover:text-slate-900 dark:hover:text-slate-100'}>Memories</a>
               </nav>
-              <button
-                onClick={() => setShowSandbox(true)}
-                className="hidden sm:inline-flex items-center justify-center rounded-lg border border-cyan-400/40 bg-cyan-100/70 px-3 py-2 text-sm font-semibold text-cyan-900 hover:ring-2 hover:ring-cyan-300/40 dark:border-cyan-400/30 dark:bg-cyan-900/30 dark:text-cyan-100"
-              >
-                View Sandbox
-              </button>
               <button onClick={toggleTheme} className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700" aria-label="Toggle theme">
                 {theme === 'dark' ? 'Light' : 'Dark'}
               </button>
@@ -643,18 +612,13 @@ function App() {
           </div>
         </div>
         <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">Saved pathways appear here. Click a memory to review its details, update the context, or generate a new story.</p>
-        {(analyzeError || storyText) && (
+        {storyText && (
           <div className="mb-4 rounded-xl border border-slate-200/70 bg-white/80 p-4 backdrop-blur dark:border-slate-700 dark:bg-slate-900/50">
             <div className="mb-2 flex items-center justify-between gap-2">
               <h3 className="m-0 text-base font-semibold">Generated Story</h3>
-              <button className="rounded-md border border-slate-300 px-2 py-1 text-xs dark:border-slate-600" onClick={() => { setStoryText(''); setAnalyzeError(null); }}>Clear</button>
+              <button className="rounded-md border border-slate-300 px-2 py-1 text-xs dark:border-slate-600" onClick={() => setStoryText('')}>Clear</button>
             </div>
-            {analyzeError && (
-              <div className="mb-2 rounded-md border border-pink-400/40 bg-pink-500/10 px-2 py-1 text-xs text-pink-100">{analyzeError}</div>
-            )}
-            {storyText && (
-              <div className="whitespace-pre-wrap text-sm text-slate-800 dark:text-slate-200">{storyText}</div>
-            )}
+            <div className="whitespace-pre-wrap text-sm text-slate-800 dark:text-slate-200">{storyText}</div>
           </div>
         )}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
