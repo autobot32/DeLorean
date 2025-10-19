@@ -1,5 +1,5 @@
 import TunnelSandbox from './three/TunnelSandbox'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 function App() {
   // Local-only state for previewing memories
@@ -20,6 +20,8 @@ function App() {
   })
   const fileInputRef = useRef(null)
   const pendingContextRef = useRef('')
+  const overlayTimeoutRef = useRef(null)
+  const overlayDelayRef = useRef(null)
   const [isDropping, setIsDropping] = useState(false)
   const [theme, setTheme] = useState('dark')
   const starCanvasRef = useRef(null)
@@ -37,8 +39,41 @@ function App() {
   const [createContextDraft, setCreateContextDraft] = useState('')
   const [storyText, setStoryText] = useState('')
   const [tunnelAssets, setTunnelAssets] = useState([])
+  const [tunnelId, setTunnelId] = useState(null)
+  const [showLoading, setShowLoading] = useState(false)
+  const [loadingText, setLoadingText] = useState('Taking a trip down memory lane…')
+  const [overlayFading, setOverlayFading] = useState(false)
   const [draftBatch, setDraftBatch] = useState([]) // [{ id, file, objectUrl, name, lastModified, context }]
   const API_BASE = (import.meta?.env?.VITE_API_BASE || 'http://localhost:4000').replace(/\/$/,'')
+
+  useEffect(() => {
+    return () => {
+      if (overlayTimeoutRef.current) {
+        clearTimeout(overlayTimeoutRef.current)
+        overlayTimeoutRef.current = null
+      }
+      if (overlayDelayRef.current) {
+        clearTimeout(overlayDelayRef.current)
+        overlayDelayRef.current = null
+      }
+    }
+  }, [])
+
+  const hideOverlayWithFade = useCallback((ms = 500) => {
+    if (overlayTimeoutRef.current) {
+      clearTimeout(overlayTimeoutRef.current)
+    }
+    if (overlayDelayRef.current) {
+      clearTimeout(overlayDelayRef.current)
+      overlayDelayRef.current = null
+    }
+    setOverlayFading(true)
+    overlayTimeoutRef.current = window.setTimeout(() => {
+      setShowLoading(false)
+      setOverlayFading(false)
+      overlayTimeoutRef.current = null
+    }, ms)
+  }, [overlayDelayRef, overlayTimeoutRef])
 
   const ordinalLabel = (n) => {
     const suffixes = ['th', 'st', 'nd', 'rd']
@@ -290,11 +325,73 @@ function App() {
     return seed
   }
 
-  function addFiles(files){
+  
+  async function uploadFilesImmediate(fileList, tempIds = [], promptOverrides = {}){
+    try {
+      setUploadError(null)
+      setIsUploading(true)
+      const form = new FormData()
+      const contexts = []
+      const files = Array.from(fileList || [])
+      files.forEach((file, idx) => {
+        if (!(file instanceof File) || !file.type?.startsWith('image/')) return
+        const filename = file.name || `memory-${Date.now()}-${idx}.jpg`
+        form.append('images', file, filename)
+        const tempId = tempIds[idx]
+        const prompt = (promptOverrides[tempId] ?? prompts[tempId] ?? '').trim()
+        contexts.push(prompt)
+      })
+      if (contexts.length) {
+        form.append('contexts', JSON.stringify(contexts))
+      }
+      if (!form.has('images')) {
+        throw new Error('No images were added.')
+      }
+      const res = await fetch(`${API_BASE}/api/uploads`, { method: 'POST', body: form })
+      if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
+      const data = await res.json()
+      const uploaded = Array.isArray(data.assets) ? data.assets : []
+      if (uploaded.length) {
+        setPrompts((prev) => {
+          const base = { ...(prev || {}) }
+          uploaded.forEach((asset, idx) => {
+            const prompt = contexts[idx] || ''
+            if (prompt) base[asset.id || asset.filename] = prompt
+          })
+          return base
+        })
+        setMemories((prev) => {
+          const toRemove = new Set(tempIds)
+          prev.filter(m => toRemove.has(m.id) && m.objectUrl).forEach(m => { try { URL.revokeObjectURL(m.objectUrl) } catch {} })
+          const filtered = prev.filter(m => !toRemove.has(m.id))
+          const seen = new Set(filtered.map(m => m.url).filter(Boolean))
+          const normalized = uploaded.map((asset) => ({
+            id: asset.id || asset.filename,
+            title: asset.originalName || asset.filename,
+            meta: new Date(asset.createdAt || Date.now()).toLocaleDateString(),
+            url: asset.url,
+          }))
+          const deduped = normalized.filter(item => !seen.has(item.url))
+          return [...deduped, ...filtered]
+        })
+      }
+    } catch(err) {
+      setUploadError(err.message || 'Upload failed')
+    } finally {
+      setIsUploading(false)
+    }
+  }
+
+function addFiles(files){
+  const fileArray = Array.from(files || [])
+  if (!fileArray.length) return
+
+  const baseContext = (pendingContextRef.current || createContextDraft || '').trim()
+
+  if (page === 'create') {
     const staged = []
-    const baseContext = (pendingContextRef.current || createContextDraft || '').trim()
-    for (const file of files){
-      if (!file.type.startsWith('image/')) continue
+    fileArray.forEach((file) => {
+      if (!file.type.startsWith('image/')) return
       const objectUrl = URL.createObjectURL(file)
       const id = `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2,7)}`
       staged.push({
@@ -305,11 +402,38 @@ function App() {
         lastModified: file.lastModified,
         context: baseContext,
       })
-    }
-    if (staged.length){
+    })
+    if (staged.length) {
       setDraftBatch((prev) => [...prev, ...staged])
     }
+  } else {
+    const next = []
+    const tempIds = []
+    const newPrompts = {}
+    fileArray.forEach((file) => {
+      if (!file.type.startsWith('image/')) return
+      const objectUrl = URL.createObjectURL(file)
+      const id = `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2,7)}`
+      tempIds.push(id)
+      next.push({ id, title: file.name, meta: new Date(file.lastModified).toLocaleDateString(), objectUrl })
+      if (baseContext) newPrompts[id] = baseContext
+    })
+    if (next.length) {
+      setMemories(prev => [...next, ...prev])
+      if (Object.keys(newPrompts).length){
+        setPrompts(prev => {
+          const base = { ...(prev || {}) }
+          for (const [id, value] of Object.entries(newPrompts)){
+            base[id] = value
+          }
+          return base
+        })
+      }
+      pendingContextRef.current = ''
+      uploadFilesImmediate(fileArray, tempIds, newPrompts)
+    }
   }
+}
 
   function onFileChange(e){
     const files = e.currentTarget.files
@@ -362,22 +486,33 @@ function App() {
     })
   }
 
-  async function analyzeAll(itemsForStory){
+  async function analyzeAll(itemsForStory, options = {}){
     try{
       setAnalyzeError(null)
       setIsAnalyzing(true)
       const items = Array.isArray(itemsForStory) ? itemsForStory.filter(it => it?.id) : []
-      if (!items.length){ setIsAnalyzing(false); return }
-      // Use /api/story to process contexts
-      const res = await fetch(`${API_BASE}/api/story`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memories: items })
-      })
-      if (!res.ok) throw new Error(`Analyze failed: ${res.status}`)
-      const data = await res.json()
-      setStoryText(typeof data.story === 'string' ? data.story : '')
+      if (!items.length){ setIsAnalyzing(false); return [] }
 
+      const activeTunnelId = options?.tunnelId || null
+
+      const results = await Promise.all(items.map(async ({ id, context }) => {
+        const baseUrl = `${API_BASE}/api/uploads/${encodeURIComponent(id)}/story`
+        const storyUrl = activeTunnelId
+          ? `${baseUrl}?tunnelId=${encodeURIComponent(activeTunnelId)}`
+          : baseUrl
+        const res = await fetch(storyUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ context: context || '' }),
+        })
+        if (!res.ok) throw new Error(`Story request failed: ${res.status}`)
+        return res.json().catch(() => null)
+      }))
+
+      return results
     }catch(err){
       setAnalyzeError(err.message || 'Analyze failed')
+      throw err
     }finally{
       setIsAnalyzing(false)
     }
@@ -386,7 +521,19 @@ function App() {
   // Upload staged images and contexts, analyze them, and launch the experience
   async function uploadDraftToServerAndAnalyze(){
     if (!draftBatch.length) return
+    let activeTunnelId = null
     try{
+      if (overlayTimeoutRef.current) {
+        clearTimeout(overlayTimeoutRef.current)
+        overlayTimeoutRef.current = null
+      }
+      if (overlayDelayRef.current) {
+        clearTimeout(overlayDelayRef.current)
+        overlayDelayRef.current = null
+      }
+      setLoadingText('Taking a trip down memory lane…')
+      setOverlayFading(false)
+      setShowLoading(true)
       setUploadError(null)
       setAnalyzeError(null)
       setIsUploading(true)
@@ -406,18 +553,30 @@ function App() {
       }
       form.append('contexts', JSON.stringify(contexts))
 
+      const tunnelStartRes = await fetch(`${API_BASE}/api/tunnels/start`, { method: 'POST' })
+      if (!tunnelStartRes.ok) throw new Error('Failed to start tunnel')
+      const tunnelPayload = await tunnelStartRes.json().catch(() => ({}))
+      const startedTunnelId = tunnelPayload?.tunnelId
+      if (!startedTunnelId) throw new Error('Server did not return a tunnel ID.')
+      activeTunnelId = startedTunnelId
+      setTunnelAssets([])
+      setTunnelId(startedTunnelId)
+      setLoadingText('Packing memories…')
+
       const uploadRes = await fetch(`${API_BASE}/api/uploads`, { method: 'POST', body: form })
       if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`)
       const uploadData = await uploadRes.json()
       const uploaded = Array.isArray(uploadData.assets) ? uploadData.assets : []
       if (!uploaded.length) throw new Error('No assets were returned from the upload.')
+      setLoadingText('Spinning a story from your photos…')
 
       const itemsForStory = uploaded.map((asset, idx) => ({
         id: asset.id || asset.filename,
         context: contexts[idx] || '',
       }))
 
-      await analyzeAll(itemsForStory)
+      await analyzeAll(itemsForStory, { tunnelId: activeTunnelId })
+      setLoadingText('Recording narration…')
 
       setPrompts((prev) => {
         const base = { ...(prev || {}) }
@@ -441,13 +600,37 @@ function App() {
         return [...deduped, ...filtered]
       })
 
-      const assetsRes = await fetch(`${API_BASE}/api/uploads`)
-      if (!assetsRes.ok) throw new Error(`Failed to load uploads: ${assetsRes.status}`)
-      const assetsData = await assetsRes.json()
-      const fetchedAssets = Array.isArray(assetsData.assets) ? assetsData.assets : []
-      setTunnelAssets(fetchedAssets)
-      if (fetchedAssets.length) {
+      if (!activeTunnelId) throw new Error('Tunnel session missing.')
+      const commitRes = await fetch(`${API_BASE}/api/tunnels/${encodeURIComponent(activeTunnelId)}/commit`, { method: 'POST' })
+      if (!commitRes.ok) throw new Error(`Failed to commit tunnel: ${commitRes.status}`)
+      const commitData = await commitRes.json().catch(() => ({}))
+      const committedAssets = Array.isArray(commitData.assets) ? commitData.assets : []
+      const versionToken = `v=${activeTunnelId}`
+      const appendVersion = (src) => {
+        if (typeof src !== 'string' || !src.length) return src
+        if (src.includes(versionToken)) return src
+        return src.includes('?') ? `${src}&${versionToken}` : `${src}?${versionToken}`
+      }
+      const enriched = committedAssets.map((asset) => ({
+        ...asset,
+        url: appendVersion(asset.url),
+        audioUrl: asset.audioUrl ? appendVersion(asset.audioUrl) : null,
+      }))
+
+      setTunnelAssets(enriched)
+      if (enriched.length) {
+        setLoadingText('Starting your experience…')
         window.location.hash = '#/experience'
+        if (overlayDelayRef.current) {
+          clearTimeout(overlayDelayRef.current)
+        }
+        overlayDelayRef.current = window.setTimeout(() => {
+          hideOverlayWithFade(600)
+          overlayDelayRef.current = null
+        }, 400)
+      } else {
+        setLoadingText('No new memories just yet.')
+        hideOverlayWithFade(400)
       }
 
       draftBatch.forEach((draft) => {
@@ -459,6 +642,10 @@ function App() {
       pendingContextRef.current = ""
     }catch(err){
       setUploadError(err.message || 'Upload failed')
+      setTunnelAssets([])
+      setTunnelId((prev) => (prev === activeTunnelId ? null : prev))
+      setLoadingText(err?.message || 'Something went wrong. Please try again.')
+      hideOverlayWithFade(400)
     }finally{
       setIsUploading(false)
       setIsAnalyzing(false)
@@ -467,13 +654,30 @@ function App() {
 
   if (page === 'experience') {
     return (
-      <TunnelSandbox
-        assets={tunnelAssets}
-        onExit={() => {
-          setTunnelAssets([])
-          window.location.hash = '#/memories'
-        }}
-      />
+      <>
+        <LoadingOverlay show={showLoading} fadingOut={overlayFading} text={loadingText} />
+        <TunnelSandbox
+          key={tunnelId || 'no-tunnel'}
+          tunnelId={tunnelId}
+          assets={tunnelAssets}
+          onExit={() => {
+            setTunnelAssets([])
+            setTunnelId(null)
+            setLoadingText('Taking a trip down memory lane…')
+            setOverlayFading(false)
+            if (overlayTimeoutRef.current) {
+              clearTimeout(overlayTimeoutRef.current)
+              overlayTimeoutRef.current = null
+            }
+            if (overlayDelayRef.current) {
+              clearTimeout(overlayDelayRef.current)
+              overlayDelayRef.current = null
+            }
+            setShowLoading(false)
+            window.location.hash = '#/memories'
+          }}
+        />
+      </>
     )
   }
 
@@ -765,10 +969,46 @@ function App() {
     </main>
   )
 
-  return mainView
+  return (
+    <>
+      <LoadingOverlay show={showLoading} fadingOut={overlayFading} text={loadingText} />
+      {mainView}
+    </>
+  )
 }
 
 export default App
+
+function LoadingOverlay({ show, fadingOut, text }) {
+  if (!show && !fadingOut) {
+    return null
+  }
+
+  const visibleText = text || 'Taking a trip down memory lane…'
+  const stateClasses = fadingOut ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'
+
+  return (
+    <div className={`fixed inset-0 z-[100] flex items-center justify-center overflow-hidden px-6 transition-opacity duration-500 ${stateClasses}`}>
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-950/95 via-indigo-900/90 to-slate-950/95" />
+      <div className="absolute -left-24 top-16 h-[36rem] w-[36rem] rounded-full bg-pink-500/25 blur-3xl animate-spin" style={{ animationDuration: '18s' }} aria-hidden />
+      <div className="absolute -right-20 bottom-24 h-[30rem] w-[30rem] rounded-full bg-cyan-400/20 blur-3xl animate-pulse" aria-hidden />
+      <div className="relative z-10 flex flex-col items-center gap-4 text-center text-white drop-shadow-lg" role="status" aria-live="polite">
+        <h2 className="text-2xl font-semibold tracking-wide sm:text-3xl">{visibleText}</h2>
+        <p className="text-sm text-slate-200/80 sm:text-base">Buckle in—dusting off snapshots and tuning the radio 📻</p>
+        <div className="mt-6 flex items-center gap-3">
+          {[0, 1, 2].map((dot) => (
+            <span
+              key={dot}
+              className="h-3 w-3 rounded-full bg-white/90 animate-bounce"
+              style={{ animationDelay: `${dot * 0.2}s` }}
+              aria-hidden
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function StepIcon({ number }){
   return (
