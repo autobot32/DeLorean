@@ -17,6 +17,14 @@ const allowedOrigins = CLIENT_ORIGIN.split(',').map((origin) => origin.trim()).f
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DATA_FILE = path.join(DATA_DIR, 'uploads.json');
+const PLACEHOLDER_CONTEXTS = [
+  'A cherished moment layered with nostalgia and warmth.',
+  'An adventure snapshot that still hums with excitement.',
+  'A quiet pause that says more than words ever could.',
+  'A shared laugh that still echoes through time.',
+  'A turning point captured just before everything changed.',
+  'A celebration frozen in light, love, and motion.',
+];
 
 const AUDIO_DIR = path.join(__dirname, '..', 'audio');
 
@@ -59,7 +67,7 @@ const upload = multer({
 function readStoredUploads() {
   try {
     const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-    return JSON.parse(raw);
+    return normalizeRecords(JSON.parse(raw));
   } catch (error) {
     console.error('Failed to read uploads manifest:', error);
     return [];
@@ -68,10 +76,99 @@ function readStoredUploads() {
 
 function writeStoredUploads(records) {
   try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(records, null, 2), 'utf-8');
+    const normalized = normalizeRecords(Array.isArray(records) ? records : []);
+    fs.writeFileSync(DATA_FILE, JSON.stringify(normalized, null, 2), 'utf-8');
   } catch (error) {
     console.error('Failed to persist uploads manifest:', error);
   }
+}
+
+function normalizeRecords(records = []) {
+  return records.map((record, index) => normalizeRecord(record, index));
+}
+
+function normalizeRecord(record, index) {
+  if (!record || typeof record !== 'object') {
+    return {
+      id: randomUUID(),
+      order: index,
+      context: null,
+      story: createStoryState(null, null),
+    };
+  }
+
+  const context =
+    typeof record.context === 'string'
+      ? record.context
+      : record.context && typeof record.context.text === 'string'
+        ? record.context.text
+        : null;
+
+  const storyState = createStoryState(context, record.story);
+
+  return {
+    ...record,
+    order: typeof record.order === 'number' ? record.order : index,
+    context,
+    story: storyState,
+  };
+}
+
+function createStoryState(context, prior = {}) {
+  const base = typeof prior === 'object' && prior !== null ? prior : {};
+  return {
+    status: typeof base.status === 'string' ? base.status : 'pending',
+    text: typeof base.text === 'string' ? base.text : null,
+    prompt: typeof base.prompt === 'string' ? base.prompt : null,
+    updatedAt: typeof base.updatedAt === 'number' ? base.updatedAt : null,
+    error: typeof base.error === 'string' ? base.error : null,
+    contextHint: typeof base.contextHint === 'string' ? base.contextHint : context || null,
+  };
+}
+
+function parseContextField(raw) {
+  if (raw === undefined || raw === null) {
+    return [];
+  }
+
+  if (Array.isArray(raw)) {
+    return raw.map((value) => sanitizeContextValue(value));
+  }
+
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map((value) => sanitizeContextValue(value));
+      }
+    } catch (error) {
+      // treat raw as plain string
+    }
+    return [sanitizeContextValue(raw)];
+  }
+
+  return [sanitizeContextValue(raw)];
+}
+
+function sanitizeContextValue(value) {
+  if (value === undefined || value === null) {
+    return '';
+  }
+  return String(value).trim();
+}
+
+function generatePlaceholderContext(position, file) {
+  const template = PLACEHOLDER_CONTEXTS[position % PLACEHOLDER_CONTEXTS.length];
+  const baseName = (() => {
+    if (!file?.originalname) return `Memory ${position + 1}`;
+    const cleaned = path
+      .basename(file.originalname, path.extname(file.originalname))
+      .replace(/[_-]+/g, ' ')
+      .trim();
+    return cleaned || `Memory ${position + 1}`;
+  })();
+
+  return `${template} — centered around "${baseName}".`;
 }
 
 app.get('/health', (req, res) => {
@@ -88,6 +185,7 @@ app.post('/api/uploads', upload.array('images', 20), async (req, res, next) => {
     const now = Date.now();
     const createdEntries = [];
     let orderCounter = manifest.length;
+    const contexts = parseContextField(req.body?.contexts ?? req.body?.context);
 
     const normalizeToWebp = async (file) => {
       const attempt = async (inputBuffer) =>
@@ -123,7 +221,8 @@ app.post('/api/uploads', upload.array('images', 20), async (req, res, next) => {
       }
     };
 
-    for (const file of req.files) {
+    for (let fileIndex = 0; fileIndex < req.files.length; fileIndex += 1) {
+      const file = req.files[fileIndex];
       const timestamp = Date.now();
       const randomSuffix = Math.round(Math.random() * 1e6);
       const baseName =
@@ -137,6 +236,13 @@ app.post('/api/uploads', upload.array('images', 20), async (req, res, next) => {
       const { data: webpBuffer, info } = await normalizeToWebp(file);
       await fs.promises.writeFile(targetPath, webpBuffer);
 
+      const providedContext =
+        contexts[fileIndex] ?? contexts[createdEntries.length] ?? contexts[orderCounter] ?? null;
+      const context =
+        typeof providedContext === 'string' && providedContext.length > 0
+          ? providedContext
+          : generatePlaceholderContext(orderCounter, file);
+
       const record = {
         id: randomUUID(),
         originalName: file.originalname,
@@ -149,6 +255,8 @@ app.post('/api/uploads', upload.array('images', 20), async (req, res, next) => {
         relativePath: `/uploads/${filename}`,
         order: orderCounter++,
         createdAt: now,
+        context,
+        story: createStoryState(context, { status: 'pending', updatedAt: now }),
       };
 
       manifest.push(record);
