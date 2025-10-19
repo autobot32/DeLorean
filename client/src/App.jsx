@@ -7,6 +7,9 @@ function App() {
   const [isDropping, setIsDropping] = useState(false)
   const [theme, setTheme] = useState('dark')
   const starCanvasRef = useRef(null)
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadError, setUploadError] = useState(null)
+  const API_BASE = (import.meta?.env?.VITE_API_BASE || 'http://localhost:4000').replace(/\/$/,'')
 
   // Theme: load and persist, toggle 'dark' class on <html>
   useEffect(() => {
@@ -25,7 +28,7 @@ function App() {
     const ctx = canvas.getContext('2d')
     let rafId
     let width = 0, height = 0, dpr = Math.min(window.devicePixelRatio || 1, 2)
-    const STAR_COUNT = 220
+    const STAR_COUNT = 320
     const stars = []
 
     function resize(){
@@ -42,9 +45,9 @@ function App() {
         stars.push({
           x: Math.random() * width,
           y: Math.random() * height,
-          r: Math.random() * 1.2 + 0.3,
+          r: Math.random() * 1.4 + 0.6,
           tw: Math.random() * Math.PI * 2,
-          sp: 0.1 + Math.random() * 0.4, // drift speed
+          sp: 0.08 + Math.random() * 0.35, // drift speed
           dx: -0.2 + Math.random() * 0.4, // subtle x drift
         })
       }
@@ -53,9 +56,11 @@ function App() {
     function draw(){
       ctx.clearRect(0, 0, width, height)
       ctx.fillStyle = '#ffffff'
+      ctx.shadowColor = 'rgba(255,255,255,0.9)'
+      ctx.shadowBlur = 8
       for (const s of stars){
         // twinkle
-        const a = 0.6 + Math.sin(s.tw) * 0.35
+        const a = 0.7 + Math.sin(s.tw) * 0.45
         ctx.globalAlpha = a
         ctx.beginPath()
         ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2)
@@ -69,6 +74,7 @@ function App() {
         if (s.x > width + 2){ s.x = -2 }
       }
       ctx.globalAlpha = 1
+      ctx.shadowBlur = 0
       rafId = requestAnimationFrame(draw)
     }
 
@@ -77,6 +83,32 @@ function App() {
     window.addEventListener('resize', onResize)
     return () => { cancelAnimationFrame(rafId); window.removeEventListener('resize', onResize) }
   }, [])
+
+  // Try to load existing uploads from the server (non-fatal if server is down)
+  useEffect(() => {
+    let cancelled = false
+    async function load(){
+      try{
+        const res = await fetch(`${API_BASE}/api/uploads`)
+        if(!res.ok) throw new Error(`Failed to fetch uploads: ${res.status}`)
+        const data = await res.json()
+        if(cancelled) return
+        if (Array.isArray(data.assets)){
+          const items = data.assets.map(a => ({ id: a.id || a.filename, title: a.originalName || a.filename, meta: new Date(a.createdAt || Date.now()).toLocaleDateString(), url: a.url }))
+          // Merge with any existing local previews (do not duplicate by url)
+          setMemories(prev => {
+            const seen = new Set(items.map(i => i.url))
+            const filteredPrev = prev.filter(p => !p.url || !seen.has(p.url))
+            return [...items, ...filteredPrev]
+          })
+        }
+      }catch(err){
+        // silently ignore; UI stays usable without server
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [API_BASE])
 
   function toggleTheme(){
     const next = theme === 'dark' ? 'light' : 'dark'
@@ -111,7 +143,11 @@ function App() {
       const objectUrl = URL.createObjectURL(file)
       next.push({ id: `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2,7)}`, title: file.name, meta: new Date(file.lastModified).toLocaleDateString(), objectUrl })
     }
-    if (next.length) setMemories(prev => [...next, ...prev])
+    if (next.length){
+      setMemories(prev => [...next, ...prev])
+      // Fire and forget upload to server
+      uploadToServer(files)
+    }
   }
 
   function onFileChange(e){
@@ -154,10 +190,38 @@ function App() {
     })
   }
 
+  async function uploadToServer(fileList){
+    try{
+      setUploadError(null)
+      setIsUploading(true)
+      const form = new FormData()
+      let count = 0
+      for (const file of fileList){
+        if (file.type?.startsWith('image/')){
+          form.append('images', file)
+          count++
+        }
+      }
+      if (count === 0){ setIsUploading(false); return }
+      const res = await fetch(`${API_BASE}/api/uploads`, { method: 'POST', body: form })
+      if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
+      const data = await res.json()
+      if (Array.isArray(data.assets)){
+        const items = data.assets.map(a => ({ id: a.id || a.filename, title: a.originalName || a.filename, meta: new Date(a.createdAt || Date.now()).toLocaleDateString(), url: a.url }))
+        setMemories(prev => [...items, ...prev])
+      }
+    }catch(err){
+      setUploadError(err.message || 'Upload failed')
+    }finally{
+      setIsUploading(false)
+    }
+  }
+
   return (
-    <main className="relative mx-auto max-w-6xl p-6 space-y-6">
+    <main className="relative min-h-dvh w-full">
+      <div className="mx-auto max-w-6xl p-6 space-y-6">
       {/* Animated ambient background */}
-      <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
+      <div aria-hidden className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         {/* Starfield layer */}
         <canvas ref={starCanvasRef} className="absolute inset-0 h-full w-full"></canvas>
         <div className="animate-gradient-slow absolute -top-40 left-1/2 h-[55vh] w-[90vw] -translate-x-1/2 rounded-full opacity-40 blur-3xl bg-[linear-gradient(90deg,#00EAFF,45%,#FF3EC9,65%,#8A5CF6)] bg-[length:200%_200%]"></div>
@@ -232,8 +296,8 @@ function App() {
           {memories.map(m => (
             <article key={m.id} className="overflow-hidden rounded-xl border border-slate-200/60 bg-white/90 shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/80">
               <div className="relative aspect-[16/10] grid place-items-center bg-slate-100 dark:bg-slate-950/60" aria-label={m.title} role="img">
-                {m.objectUrl ? (
-                  <img className="h-full w-full object-cover" src={m.objectUrl} alt={m.title} />
+                {m.objectUrl || m.url ? (
+                  <img className="h-full w-full object-cover" src={m.url || m.objectUrl} alt={m.title} />
                 ) : (
                   <div className="h-[76%] w-[92%] rounded-lg border border-dashed border-pink-300/50 bg-gradient-to-br from-pink-50 to-cyan-50 dark:border-slate-700 dark:from-[#1a1d3a] dark:to-[#0f2440]" aria-hidden="true" />
                 )}
@@ -250,7 +314,7 @@ function App() {
 
       <section id="upload" className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/60">
         <h2 className="mb-1 text-lg font-semibold">Upload Photos</h2>
-        <p className="mb-3 text-sm text-slate-600 dark:text-slate-400">Drag and drop images anywhere in the box, or pick files to preview them in your grid. This does not upload to a server — it stays local to your browser.</p>
+        <p className="mb-3 text-sm text-slate-600 dark:text-slate-400">Drag and drop images anywhere in the box, or pick files to add them to your grid. Files are uploaded to the local API at {API_BASE} and become available under /uploads.</p>
         <div
           className={
             `relative grid place-items-center rounded-xl border border-dashed px-6 py-10 transition-all ` +
@@ -269,8 +333,20 @@ function App() {
             </div>
           </div>
           <input ref={fileInputRef} className="hidden" type="file" accept="image/*" multiple onChange={onFileChange} />
+          {isUploading && (
+            <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-center gap-2 rounded-md border border-cyan-400/30 bg-cyan-500/10 px-2 py-1 text-xs text-cyan-200">
+              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-cyan-300"></span>
+              Uploading…
+            </div>
+          )}
+          {uploadError && (
+            <div className="absolute inset-x-3 bottom-3 rounded-md border border-pink-400/40 bg-pink-500/10 px-2 py-1 text-xs text-pink-200">
+              {uploadError}
+            </div>
+          )}
         </div>
       </section>
+      </div>
     </main>
   )
 }
