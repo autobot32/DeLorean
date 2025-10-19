@@ -10,28 +10,11 @@ import './tunnelSandbox.css'
 
 const WALK_SPEED = 20
 const SLOT_SPACING = 9
-
-function createImageTexture(index) {
-  const size = 256
-  const canvas = document.createElement('canvas')
-  canvas.width = canvas.height = size
-  const ctx = canvas.getContext('2d')
-  const hues = [190, 320, 60, 120, 260]
-  const gradient = ctx.createLinearGradient(0, 0, size, size)
-  const hue = hues[index % hues.length]
-  gradient.addColorStop(0, `hsl(${hue}, 70%, 60%)`)
-  gradient.addColorStop(1, `hsl(${(hue + 40) % 360}, 70%, 45%)`)
-  ctx.fillStyle = gradient
-  ctx.fillRect(0, 0, size, size)
-  ctx.fillStyle = 'rgba(255,255,255,0.15)'
-  ctx.fillRect(30, 40, size - 60, size - 80)
-  ctx.fillStyle = 'rgba(0,0,0,0.18)'
-  ctx.font = 'bold 60px Inter, sans-serif'
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
-  ctx.fillText(`#${(index + 1).toString().padStart(2, '0')}`, size / 2, size / 2)
-  return new THREE.CanvasTexture(canvas)
-}
+// --- Audio proximity tuning ---
+const MAX_AUDIO_VOL = 0.65
+const NEAR_DIST = 2.2
+const FAR_DIST = 9.0
+const VOL_LERP = 0.12
 
 function buildSlotPositions(baseSlots) {
   return baseSlots.map((slot, index) => {
@@ -53,17 +36,19 @@ function loadTexture(url, loader) {
   return loader.load(href)
 }
 
-function TunnelSandbox({ onExit }) {
+function TunnelSandbox({ onExit, assets = [] }) {
   const canvasRef = useRef(null)
   const controlsRef = useRef(null)
   const [isLocked, setIsLocked] = useState(false)
   const [instructionsVisible, setInstructionsVisible] = useState(true)
+  const allAudiosRef = useRef([])
 
   const slotBlueprint = useMemo(() => buildSlotPositions(DefaultTunnel.slots), [])
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return undefined
+    allAudiosRef.current = []
 
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -213,9 +198,21 @@ function TunnelSandbox({ onExit }) {
 
     const imageGeometry = new THREE.PlaneGeometry(4, 3)
     const floats = []
+    const textureLoader = new THREE.TextureLoader()
+    const loadedTextures = []
+    const loadedAudios = []
     slotBlueprint.forEach((slot, index) => {
-      const texture = createImageTexture(index)
+      const asset = assets[index]
+      if (!asset?.url) {
+        return
+      }
+
+      const texture = textureLoader.load(asset.url, (tex) => {
+        tex.colorSpace = THREE.SRGBColorSpace
+      })
+      texture.colorSpace = THREE.SRGBColorSpace
       texture.anisotropy = renderer.capabilities.getMaxAnisotropy()
+      loadedTextures.push(texture)
 
       const frameMaterial = new THREE.MeshLambertMaterial({
         color: 0x0c1121,
@@ -236,6 +233,18 @@ function TunnelSandbox({ onExit }) {
       mesh.castShadow = true
       scene.add(mesh)
 
+      let audio = null
+      const audioUrl = asset.story?.audioUrl || asset.audioUrl
+      if (audioUrl) {
+        audio = new Audio(audioUrl)
+        audio.loop = true
+        audio.crossOrigin = 'anonymous'
+        audio.volume = 0
+        audio.play().catch(() => {})
+        loadedAudios.push(audio)
+        allAudiosRef.current.push(audio)
+      }
+
       floats.push({
         mesh,
         origin: mesh.position.clone(),
@@ -243,6 +252,7 @@ function TunnelSandbox({ onExit }) {
         speed: 0.22 + Math.random() * 0.2,
         phase: Math.random() * Math.PI * 2,
         amplitude: 0.28 + Math.random() * 0.18,
+        audio,
       })
     })
 
@@ -254,10 +264,12 @@ function TunnelSandbox({ onExit }) {
     controls.addEventListener('lock', () => {
       setIsLocked(true)
       setInstructionsVisible(false)
+      allAudiosRef.current.forEach((audio) => audio?.play?.().catch(() => {}))
     })
     controls.addEventListener('unlock', () => {
       setIsLocked(false)
       setInstructionsVisible(true)
+      allAudiosRef.current.forEach((audio) => audio?.pause?.())
     })
     const rig = controls.getObject()
     scene.add(rig)
@@ -365,10 +377,22 @@ function TunnelSandbox({ onExit }) {
       }
 
       floats.forEach((float) => {
-        const { mesh, origin, axis, speed, phase, amplitude } = float
+        const { mesh, origin, axis, speed, phase, amplitude, audio } = float
         const t = elapsed * speed + phase
         const offset = axis.clone().multiplyScalar(Math.sin(t) * amplitude)
         mesh.position.copy(origin).add(offset)
+
+        if (audio) {
+          const distance = mesh.position.distanceTo(rig.position)
+          const tProx = THREE.MathUtils.clamp((FAR_DIST - distance) / (FAR_DIST - NEAR_DIST), 0, 1)
+          const targetVol = Math.pow(tProx, 1.4) * MAX_AUDIO_VOL
+          audio.volume += (targetVol - audio.volume) * VOL_LERP
+          if (audio.volume <= 0.0001 && !audio.paused && distance > FAR_DIST) {
+            audio.pause()
+          } else if (audio.volume > 0.0001 && audio.paused) {
+            audio.play().catch(() => {})
+          }
+        }
       })
 
       starMaterial.opacity = 0.82 + 0.06 * Math.sin(elapsed * 0.2)
@@ -385,9 +409,17 @@ function TunnelSandbox({ onExit }) {
       if (controls.isLocked) controls.unlock()
       controls.dispose()
       renderer.dispose()
+      loadedTextures.forEach(tex => tex.dispose?.())
       composer.dispose?.()
       bloomPass.dispose?.()
       pmrem.dispose?.()
+      loadedAudios.forEach((audio) => {
+        try { audio.pause() } catch {}
+      })
+      allAudiosRef.current.forEach((audio) => {
+        try { audio.pause() } catch {}
+      })
+      allAudiosRef.current = []
       scene.traverse((child) => {
         if (child.isMesh) {
           child.geometry?.dispose?.()
@@ -402,7 +434,7 @@ function TunnelSandbox({ onExit }) {
     }
 
     return dispose
-  }, [slotBlueprint])
+  }, [slotBlueprint, assets])
 
   return (
     <div className="sandbox-shell">

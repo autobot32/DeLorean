@@ -1,3 +1,4 @@
+import TunnelSandbox from './three/TunnelSandbox'
 import { useEffect, useRef, useState } from 'react'
 
 function App() {
@@ -35,6 +36,8 @@ function App() {
   const [analyzeError, setAnalyzeError] = useState(null)
   const [createContextDraft, setCreateContextDraft] = useState('')
   const [storyText, setStoryText] = useState('')
+  const [tunnelAssets, setTunnelAssets] = useState([])
+  const [draftBatch, setDraftBatch] = useState([]) // [{ id, file, objectUrl, name, lastModified, context }]
   const API_BASE = (import.meta?.env?.VITE_API_BASE || 'http://localhost:4000').replace(/\/$/,'')
 
   const ordinalLabel = (n) => {
@@ -47,6 +50,7 @@ function App() {
   // Lightweight hash routing for three pages
   function parseHash(){
     const h = (window.location.hash || '').toLowerCase()
+    if (h.includes('experience')) return 'experience'
     if (h.includes('create')) return 'create'
     if (h.includes('memories')) return 'memories'
     return 'welcome'
@@ -287,32 +291,23 @@ function App() {
   }
 
   function addFiles(files){
-    const next = []
-    const tempIds = []
-    const newPrompts = {}
-    const pendingContext = (pendingContextRef.current || '').trim()
+    const staged = []
+    const baseContext = (pendingContextRef.current || createContextDraft || '').trim()
     for (const file of files){
       if (!file.type.startsWith('image/')) continue
       const objectUrl = URL.createObjectURL(file)
       const id = `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2,7)}`
-      tempIds.push(id)
-      next.push({ id, title: file.name, meta: new Date(file.lastModified).toLocaleDateString(), objectUrl })
-      if (pendingContext) newPrompts[id] = pendingContext
+      staged.push({
+        id,
+        file,
+        objectUrl,
+        name: file.name,
+        lastModified: file.lastModified,
+        context: baseContext,
+      })
     }
-    if (next.length){
-      setMemories(prev => [...next, ...prev])
-      if (Object.keys(newPrompts).length){
-        setPrompts(prev => {
-          const base = { ...(prev || {}) }
-          for (const [id, value] of Object.entries(newPrompts)){
-            base[id] = value
-          }
-          return base
-        })
-      }
-      pendingContextRef.current = ''
-      // Upload then replace temps with server-backed entries
-      uploadToServer(files, tempIds, newPrompts)
+    if (staged.length){
+      setDraftBatch((prev) => [...prev, ...staged])
     }
   }
 
@@ -367,59 +362,11 @@ function App() {
     })
   }
 
-  async function uploadToServer(fileList, tempIds = [], batchPrompts = {}){
-    try{
-      setUploadError(null)
-      setIsUploading(true)
-      const form = new FormData()
-      let count = 0
-      const contexts = []
-      let i = 0
-      for (const file of fileList){
-        if (file.type?.startsWith('image/')){
-          form.append('images', file)
-          count++
-          const tid = tempIds?.[i]
-          const basePrompt = tid ? (batchPrompts[tid] ?? prompts[tid] ?? '') : ''
-          contexts.push((basePrompt || '').trim())
-          i++
-        }
-      }
-      // Attach per-file contexts as an array aligned with images order
-      if (contexts.length) form.append('contexts', JSON.stringify(contexts))
-      if (count === 0){ setIsUploading(false); return }
-      const res = await fetch(`${API_BASE}/api/uploads`, { method: 'POST', body: form })
-      if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
-      const data = await res.json()
-      if (Array.isArray(data.assets)){
-        const items = data.assets.map(a => ({ id: a.id || a.filename, title: a.originalName || a.filename, meta: new Date(a.createdAt || Date.now()).toLocaleDateString(), url: a.url }))
-        setMemories(prev => {
-          // Remove temporary previews we created for this batch
-          const toRemove = new Set(tempIds)
-          prev.filter(m => toRemove.has(m.id) && m.objectUrl).forEach(m => {
-            try { URL.revokeObjectURL(m.objectUrl) } catch {}
-          })
-          const filtered = prev.filter(m => !toRemove.has(m.id))
-          // De-duplicate by URL in case something already exists
-          const seenUrls = new Set(filtered.map(m => m.url).filter(Boolean))
-          const dedupItems = items.filter(it => !seenUrls.has(it.url))
-          return [...dedupItems, ...filtered]
-        })
-      }
-    }catch(err){
-      setUploadError(err.message || 'Upload failed')
-    }finally{
-      setIsUploading(false)
-    }
-  }
-
-  async function analyzeAll(){
+  async function analyzeAll(itemsForStory){
     try{
       setAnalyzeError(null)
       setIsAnalyzing(true)
-      const items = memories
-        .filter(m => m.id && prompts[m.id] && prompts[m.id].trim())
-        .map(m => ({ id: m.id, context: prompts[m.id].trim() }))
+      const items = Array.isArray(itemsForStory) ? itemsForStory.filter(it => it?.id) : []
       if (!items.length){ setIsAnalyzing(false); return }
       // Use /api/story to process contexts
       const res = await fetch(`${API_BASE}/api/story`, {
@@ -428,11 +375,106 @@ function App() {
       if (!res.ok) throw new Error(`Analyze failed: ${res.status}`)
       const data = await res.json()
       setStoryText(typeof data.story === 'string' ? data.story : '')
+
     }catch(err){
       setAnalyzeError(err.message || 'Analyze failed')
     }finally{
       setIsAnalyzing(false)
     }
+  }
+
+  // Upload staged images and contexts, analyze them, and launch the experience
+  async function uploadDraftToServerAndAnalyze(){
+    if (!draftBatch.length) return
+    try{
+      setUploadError(null)
+      setAnalyzeError(null)
+      setIsUploading(true)
+
+      const form = new FormData()
+      const contexts = []
+      draftBatch.forEach((item, index) => {
+        if (item?.file instanceof File) {
+          const filename = item.file.name || item.name || `memory-${index + 1}.jpg`
+          form.append('images', item.file, filename)
+          contexts.push((item.context || '').trim())
+        }
+      })
+
+      if (contexts.length === 0) {
+        throw new Error('Please add images before analyzing the pathway.')
+      }
+      form.append('contexts', JSON.stringify(contexts))
+
+      const uploadRes = await fetch(`${API_BASE}/api/uploads`, { method: 'POST', body: form })
+      if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`)
+      const uploadData = await uploadRes.json()
+      const uploaded = Array.isArray(uploadData.assets) ? uploadData.assets : []
+      if (!uploaded.length) throw new Error('No assets were returned from the upload.')
+
+      const itemsForStory = uploaded.map((asset, idx) => ({
+        id: asset.id || asset.filename,
+        context: contexts[idx] || '',
+      }))
+
+      await analyzeAll(itemsForStory)
+
+      setPrompts((prev) => {
+        const base = { ...(prev || {}) }
+        uploaded.forEach((asset, idx) => {
+          const ctx = contexts[idx] || ''
+          if (ctx) base[asset.id || asset.filename] = ctx
+        })
+        return base
+      })
+
+      const normalized = uploaded.map((a) => ({
+        id: a.id || a.filename,
+        title: a.originalName || a.filename,
+        meta: new Date(a.createdAt || Date.now()).toLocaleDateString(),
+        url: a.url,
+      }))
+      setMemories((prev) => {
+        const filtered = prev.filter((m) => !!m.url)
+        const seen = new Set(filtered.map((m) => m.url))
+        const deduped = normalized.filter((item) => !seen.has(item.url))
+        return [...deduped, ...filtered]
+      })
+
+      const assetsRes = await fetch(`${API_BASE}/api/uploads`)
+      if (!assetsRes.ok) throw new Error(`Failed to load uploads: ${assetsRes.status}`)
+      const assetsData = await assetsRes.json()
+      const fetchedAssets = Array.isArray(assetsData.assets) ? assetsData.assets : []
+      setTunnelAssets(fetchedAssets)
+      if (fetchedAssets.length) {
+        window.location.hash = '#/experience'
+      }
+
+      draftBatch.forEach((draft) => {
+        if (draft.objectUrl) {
+          try { URL.revokeObjectURL(draft.objectUrl) } catch {}
+        }
+      })
+      setDraftBatch([])
+      pendingContextRef.current = ""
+    }catch(err){
+      setUploadError(err.message || 'Upload failed')
+    }finally{
+      setIsUploading(false)
+      setIsAnalyzing(false)
+    }
+  }
+
+  if (page === 'experience') {
+    return (
+      <TunnelSandbox
+        assets={tunnelAssets}
+        onExit={() => {
+          setTunnelAssets([])
+          window.location.hash = '#/memories'
+        }}
+      />
+    )
   }
 
   const mainView = (
@@ -582,6 +624,78 @@ function App() {
             </div>
           </div>
 
+          {draftBatch.length > 0 && (
+            <div className="rounded-xl border border-slate-200/70 bg-white/80 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+              <h3 className="mb-3 text-base font-semibold">Review &amp; add context per image</h3>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {draftBatch.map((draft) => (
+                  <article key={draft.id} className="overflow-hidden rounded-lg border border-slate-200/60 bg-white/95 shadow-sm dark:border-slate-700/70 dark:bg-slate-900/70">
+                    <div className="aspect-[16/10] w-full bg-slate-100 dark:bg-slate-950/40">
+                      <img src={draft.objectUrl} alt={draft.name} className="h-full w-full object-cover" />
+                    </div>
+                    <div className="space-y-2 p-3 text-sm">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="m-0 truncate font-semibold text-slate-700 dark:text-slate-100" title={draft.name}>{draft.name}</p>
+                        <button
+                          type="button"
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-pink-300/60 bg-white text-slate-900 hover:bg-pink-50 dark:border-pink-500 dark:bg-slate-900/80 dark:text-slate-100"
+                          onClick={() => {
+                            setDraftBatch((prev) => {
+                              const next = prev.filter((item) => item.id !== draft.id)
+                              if (draft.objectUrl) {
+                                try { URL.revokeObjectURL(draft.objectUrl) } catch {}
+                              }
+                              return next
+                            })
+                          }}
+                          title="Remove"
+                        >
+                          ×
+                        </button>
+                      </div>
+                      <textarea
+                        rows={3}
+                        value={draft.context || ''}
+                        onChange={(e) => {
+                          const value = e.target.value
+                          setDraftBatch((prev) => prev.map((item) => item.id === draft.id ? { ...item, context: value } : item))
+                        }}
+                        className="w-full rounded-md border border-slate-300/70 bg-white px-2 py-1 text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-pink-300/30 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-100"
+                        placeholder="Add a short context for this photo"
+                      />
+                    </div>
+                  </article>
+                ))}
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  disabled={isUploading || isAnalyzing}
+                  onClick={uploadDraftToServerAndAnalyze}
+                  className={`inline-flex items-center rounded-lg border px-4 py-2 text-sm font-semibold shadow-sm ${isUploading || isAnalyzing ? 'opacity-70 cursor-wait' : ''} border-pink-300/40 bg-gradient-to-r from-neon-pink to-neon-violet text-white hover:ring-2 hover:ring-pink-300/30`}
+                  title="Upload images + contexts, generate story, then start the 3D experience"
+                >
+                  {isUploading || isAnalyzing ? 'Analyzing…' : 'Analyze Pathway'}
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                  onClick={() => {
+                    draftBatch.forEach(d => d.objectUrl && URL.revokeObjectURL(d.objectUrl))
+                    setDraftBatch([])
+                  }}
+                >
+                  Clear Draft
+                </button>
+              </div>
+              {(uploadError || analyzeError) && (
+                <div className="mt-3 space-y-1 text-sm">
+                  {uploadError && <p className="text-red-600 dark:text-red-400">{uploadError}</p>}
+                  {analyzeError && <p className="text-red-600 dark:text-red-400">{analyzeError}</p>}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex flex-wrap gap-3">
             <a href="#/memories" className="inline-flex items-center justify-center rounded-lg border border-pink-300/50 bg-gradient-to-r from-neon-pink via-neon-violet to-neon-cyan px-4 py-2 text-white font-semibold shadow hover:ring-2 hover:ring-pink-300/40">View Saved Memories</a>
             <button className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700" onClick={() => { window.location.hash = '#/memories' }}>Go to Memories Workspace</button>
@@ -600,14 +714,6 @@ function App() {
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">Memories Preview</h2>
           <div className="flex gap-2">
-            <button
-              disabled={isAnalyzing || !memories.some(m => prompts[m.id]?.trim())}
-              onClick={analyzeAll}
-              className={`inline-flex items-center rounded-lg border px-3 py-2 text-sm font-semibold shadow-sm ${isAnalyzing ? 'opacity-70 cursor-wait' : ''} border-pink-300/40 bg-gradient-to-r from-neon-pink to-neon-violet text-white hover:ring-2 hover:ring-pink-300/30`}
-              title="Analyze context prompts"
-            >
-              {isAnalyzing ? 'Analyzing…' : 'Analyze'}
-            </button>
             <button className="inline-flex items-center rounded-lg border border-cyan-400/40 bg-cyan-100/60 px-3 py-2 text-sm font-semibold text-cyan-900 hover:ring-2 hover:ring-cyan-400/30 dark:border-cyan-400/30 dark:bg-cyan-900/20 dark:text-cyan-200" onClick={clearAll}>Reset</button>
           </div>
         </div>
