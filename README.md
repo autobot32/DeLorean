@@ -20,5 +20,5 @@ and at the end, those moments are woven into one continuous story about you.
 - **Server**: `cd server && npm install && npm run dev` (runs Express API on `http://localhost:4000`)
 - **Client**: `cd client && npm install && npm run dev` (runs Vite React app on `http://localhost:5173`)
 - Configure `CLIENT_ORIGIN` on the server if the frontend runs on a different URL
-- API routes: `POST /api/uploads`, `GET /api/uploads`, `GET /api/message`, `POST /api/echo`, `GET /health`
-- Uploaded files live under `/uploads` (local disk) and are mirrored in `server/data/uploads.json`
+- API routes: `POST /api/uploads`, `GET /api/uploads`, `DELETE /api/uploads/:id`, `GET /api/message`, `POST /api/echo`, `GET /health`
+- Uploaded files are normalized to `.webp` via Sharp, saved under `/uploads`, and mirrored in `server/data/uploads.json`
