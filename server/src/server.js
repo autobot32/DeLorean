@@ -1,6 +1,6 @@
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
-const { summarizeMemories, generateMemoryStory, hasGeminiKey } = require('./ai/gemini');
+const { summarizeMemories, generateMemoryStory, composeAudiobookNarrative, hasGeminiKey } = require('./ai/gemini');
 const { synthesizeToFile } = require('./audio/voice');
 
 const fs = require('fs');
@@ -53,6 +53,14 @@ setInterval(() => {
   const cutoff = Date.now() - TUNNEL_TTL_MS;
   for (const [id, tunnel] of tunnels.entries()) {
     if (!tunnel || typeof tunnel.createdAt !== 'number' || tunnel.createdAt < cutoff) {
+      const bookFile = path.join(AUDIO_DIR, `${id}-book.mp3`);
+      try {
+        if (fs.existsSync(bookFile)) {
+          fs.unlinkSync(bookFile);
+        }
+      } catch (err) {
+        console.warn(`[cleanup] failed to delete book for ${id}:`, err.message);
+      }
       tunnels.delete(id);
     }
   }
@@ -273,6 +281,98 @@ function decorateStory(story, req) {
   };
 }
 
+async function composeBookForTunnel(tunnelId, assetIds = [], { force = false } = {}) {
+  if (!Array.isArray(assetIds) || assetIds.length === 0) {
+    const error = new Error('No assets were provided to compose the audiobook.');
+    error.code = 'NO_ASSETS';
+    throw error;
+  }
+
+  await fs.promises.mkdir(AUDIO_DIR, { recursive: true });
+  const finalFilename = `${tunnelId}-book.mp3`;
+  const outPath = path.join(AUDIO_DIR, finalFilename);
+  const publicUrl = `/audio/${finalFilename}`;
+
+  const manifest = readStoredUploads();
+  const recordsById = new Map(manifest.map((record) => [record.id, record]));
+  const usedStories = [];
+  const missingAssets = [];
+  const missingStories = [];
+
+  for (const assetId of assetIds) {
+    if (typeof assetId !== 'string' || !assetId.trim()) {
+      continue;
+    }
+    const normalizedId = assetId.trim();
+    const record = recordsById.get(normalizedId);
+    if (!record) {
+      missingAssets.push(normalizedId);
+      continue;
+    }
+    const storyText =
+      typeof record?.story?.text === 'string' && record.story.text.trim().length > 0
+        ? record.story.text.trim()
+        : null;
+    if (!storyText) {
+      missingStories.push(normalizedId);
+      continue;
+    }
+    usedStories.push({ id: normalizedId, text: storyText });
+  }
+
+  if (!usedStories.length) {
+    const error = new Error('No stories available to compose the audiobook.');
+    error.code = 'NO_STORIES';
+    error.missingAssets = missingAssets;
+    error.missingStories = missingStories;
+    throw error;
+  }
+
+  if (!force) {
+    try {
+      await fs.promises.access(outPath, fs.constants.R_OK);
+      return {
+        book: { url: publicUrl, storyCount: usedStories.length },
+        reused: true,
+        missingAssets,
+        missingStories,
+        usedAssetIds: usedStories.map((item) => item.id),
+      };
+    } catch {
+      // file missing; proceed to generate
+    }
+  }
+
+  try {
+    await fs.promises.rm(outPath, { force: true });
+  } catch {
+    // ignore removal failures; generation will overwrite
+  }
+
+  const narrative = await composeAudiobookNarrative(usedStories.map((item) => item.text), {
+    minutes: 2,
+  });
+  const clipId = `book-${tunnelId}-${Date.now()}`;
+  const audioMeta = await synthesizeToFile(narrative, clipId);
+  if (audioMeta.filePath !== outPath) {
+    try {
+      await fs.promises.rename(audioMeta.filePath, outPath);
+    } catch (renameError) {
+      const audioBuffer = await fs.promises.readFile(audioMeta.filePath);
+      await fs.promises.writeFile(outPath, audioBuffer);
+      await fs.promises.rm(audioMeta.filePath, { force: true });
+    }
+  }
+
+  return {
+    book: { url: publicUrl, storyCount: usedStories.length },
+    reused: false,
+    missingAssets,
+    missingStories,
+    usedAssetIds: usedStories.map((item) => item.id),
+  };
+}
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
@@ -283,13 +383,114 @@ app.post('/api/tunnels/start', (req, res) => {
   res.status(201).json({ tunnelId: id });
 });
 
-app.post('/api/tunnels/:tunnelId/commit', (req, res) => {
+app.post('/api/tunnels/:tunnelId/book', async (req, res) => {
   const { tunnelId } = req.params;
   const tunnel = tunnels.get(tunnelId);
   if (!tunnel) {
     return res.status(404).json({ error: 'Tunnel not found.' });
   }
-  res.json({ tunnelId, assets: Array.isArray(tunnel.assets) ? [...tunnel.assets] : [] });
+
+  const rawAssetIds = Array.isArray(req.body?.assetIds) ? req.body.assetIds : [];
+  const assetIds = rawAssetIds
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter((value) => value.length > 0);
+
+  if (!assetIds.length) {
+    return res.status(400).json({ error: 'Provide assetIds as a non-empty array.' });
+  }
+
+  if (!hasGeminiKey) {
+    return res.status(503).json({ error: 'Gemini API key is not configured on the server.' });
+  }
+  try {
+    const result = await composeBookForTunnel(tunnelId, assetIds, {
+      force: req.query?.force === '1' || req.query?.force === 'true',
+    });
+
+    tunnel.bookUrl = result.book.url;
+    tunnel.book = { ...result.book, assetIds: result.usedAssetIds || assetIds };
+    tunnels.set(tunnelId, tunnel);
+
+    const statusCode = result.reused ? 200 : 201;
+    const payload = { book: result.book };
+    if (Array.isArray(result.missingStories) && result.missingStories.length) {
+      payload.missingStories = result.missingStories;
+    }
+    if (Array.isArray(result.missingAssets) && result.missingAssets.length) {
+      payload.missingAssets = result.missingAssets;
+    }
+    if (Array.isArray(result.usedAssetIds) && result.usedAssetIds.length) {
+      payload.usedAssetIds = result.usedAssetIds;
+    }
+
+    return res.status(statusCode).json(payload);
+  } catch (error) {
+    if (error?.code === 'NO_ASSETS') {
+      return res.status(400).json({ error: 'No asset IDs were provided.' });
+    }
+    if (error?.code === 'NO_STORIES') {
+      return res.status(400).json({
+        error: 'No stories available to compose the audiobook.',
+        missingAssets: error.missingAssets || [],
+        missingStories: error.missingStories || [],
+      });
+    }
+    console.error('[books] Failed to compose audiobook', {
+      tunnelId,
+      error: error?.message,
+    });
+    return res.status(500).json({ error: 'Failed to compose audiobook.' });
+  }
+});
+
+app.post('/api/tunnels/:tunnelId/commit', async (req, res) => {
+  const { tunnelId } = req.params;
+  const tunnel = tunnels.get(tunnelId);
+  if (!tunnel) {
+    return res.status(404).json({ error: 'Tunnel not found.' });
+  }
+  const assets = Array.isArray(tunnel.assets) ? [...tunnel.assets] : [];
+  const assetIds = assets
+    .map((asset) => (typeof asset?.id === 'string' ? asset.id.trim() : ''))
+    .filter((id) => id.length > 0);
+
+  let bookMeta = null;
+  let bookError = null;
+
+  if (hasGeminiKey && assetIds.length) {
+    try {
+      const result = await composeBookForTunnel(tunnelId, assetIds, { force: true });
+      bookMeta = result.book;
+      tunnel.bookUrl = result.book.url;
+      tunnel.book = { ...result.book, assetIds: result.usedAssetIds || assetIds };
+      tunnels.set(tunnelId, tunnel);
+      if (Array.isArray(result.missingStories) && result.missingStories.length) {
+        bookMeta.missingStories = result.missingStories;
+      }
+      if (Array.isArray(result.missingAssets) && result.missingAssets.length) {
+        bookMeta.missingAssets = result.missingAssets;
+      }
+    } catch (error) {
+      if (error?.code === 'NO_STORIES') {
+        bookError = 'No stories available to compose the audiobook.';
+      } else {
+        bookError = error?.message || 'Failed to compose audiobook.';
+      }
+      console.error('[books] Commit-triggered composition failed', {
+        tunnelId,
+        error: error?.message,
+      });
+    }
+  }
+
+  const payload = { tunnelId, assets };
+  if (bookMeta) {
+    payload.book = bookMeta;
+  }
+  if (bookError) {
+    payload.bookError = bookError;
+  }
+  res.json(payload);
 });
 
 app.post(

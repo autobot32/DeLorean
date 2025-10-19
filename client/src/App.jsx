@@ -39,6 +39,7 @@ function App() {
   const [createContextDraft, setCreateContextDraft] = useState('')
   const [storyText, setStoryText] = useState('')
   const [tunnelAssets, setTunnelAssets] = useState([])
+  const [tunnelBook, setTunnelBook] = useState(null)
   const [tunnelId, setTunnelId] = useState(null)
   const [showLoading, setShowLoading] = useState(false)
   const [loadingText, setLoadingText] = useState('Taking a trip down memory lane…')
@@ -46,21 +47,21 @@ function App() {
   const [draftBatch, setDraftBatch] = useState([]) // [{ id, file, objectUrl, name, lastModified, context }]
   const API_BASE = (import.meta?.env?.VITE_API_BASE || 'http://localhost:4000').replace(/\/$/,'')
   const sparkles = useMemo(() => {
-    const TOTAL = 68
+    const TOTAL = 80
     return Array.from({ length: TOTAL }, (_, index) => {
-      const size = 1 + Math.random() * 2.2
+      const size = 0.9 + Math.random() * 2.1
       const hue = 185 + Math.random() * 140
-      const saturation = 78 + Math.random() * 14
-      const lightness = 62 + Math.random() * 20
-      const maxOpacity = 0.35 + Math.random() * 0.35
-      const minOpacity = Math.max(0.14, maxOpacity - (0.18 + Math.random() * 0.2))
+      const saturation = 72 + Math.random() * 14
+      const lightness = 62 + Math.random() * 16
+      const maxOpacity = 0.38 + Math.random() * 0.32
+      const minOpacity = Math.max(0.16, maxOpacity - (0.18 + Math.random() * 0.18))
       return {
         id: `sparkle-${index}-${Math.random().toString(36).slice(2,7)}`,
         left: Math.random() * 100,
         top: Math.random() * 100,
         size,
-        delay: Math.random() * 5.2,
-        duration: 4.5 + Math.random() * 4.5,
+        delay: Math.random() * 5.5,
+        duration: 5.5 + Math.random() * 6.5,
         maxOpacity,
         minOpacity,
         color: `hsla(${hue}, ${saturation}%, ${lightness}%, 1)`,
@@ -505,9 +506,19 @@ function addFiles(files){
   function clearAll(){
     setMemories(prev => {
       prev.forEach(m => m.objectUrl && URL.revokeObjectURL(m.objectUrl))
-      // keep server-backed items, drop local previews, and add placeholders
-      const keep = prev.filter(m => !!m.url)
-      return [...keep, ...sampleMemories()]
+      const serverIds = prev.filter(m => !!(m?.url && m?.id)).map(m => m.id)
+      serverIds.forEach(id => {
+        fetch(`${API_BASE}/api/uploads/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {})
+      })
+      if (serverIds.length) {
+        setPrompts(prior => {
+          if (!prior) return prior
+          const next = { ...prior }
+          serverIds.forEach(id => { delete next[id] })
+          return next
+        })
+      }
+      return sampleMemories()
     })
   }
 
@@ -557,6 +568,7 @@ function addFiles(files){
         clearTimeout(overlayDelayRef.current)
         overlayDelayRef.current = null
       }
+      setTunnelBook(null)
       setLoadingText('Taking a trip down memory lane…')
       setOverlayFading(false)
       setShowLoading(true)
@@ -637,12 +649,18 @@ function addFiles(files){
         if (src.includes(versionToken)) return src
         return src.includes('?') ? `${src}&${versionToken}` : `${src}?${versionToken}`
       }
+      const normalizedBook = commitData.book
+        ? { ...commitData.book, url: appendVersion(commitData.book.url) }
+        : null
+      setTunnelBook(normalizedBook)
+      if (commitData.bookError) {
+        console.warn('[commit] Audiobook generation issue:', commitData.bookError)
+      }
       const enriched = committedAssets.map((asset) => ({
         ...asset,
         url: appendVersion(asset.url),
         audioUrl: asset.audioUrl ? appendVersion(asset.audioUrl) : null,
       }))
-
       setTunnelAssets(enriched)
       if (enriched.length) {
         setLoadingText('Starting your experience…')
@@ -670,6 +688,7 @@ function addFiles(files){
       setUploadError(err.message || 'Upload failed')
       setTunnelAssets([])
       setTunnelId((prev) => (prev === activeTunnelId ? null : prev))
+      setTunnelBook(null)
       setLoadingText(err?.message || 'Something went wrong. Please try again.')
       hideOverlayWithFade(400)
     }finally{
@@ -686,6 +705,7 @@ function addFiles(files){
           key={tunnelId || 'no-tunnel'}
           tunnelId={tunnelId}
           assets={tunnelAssets}
+          book={tunnelBook}
           onExit={() => {
             setTunnelAssets([])
             setTunnelId(null)
