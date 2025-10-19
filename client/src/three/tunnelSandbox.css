@@ -1,0 +1,115 @@
+.sandbox-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100%;
+  background: radial-gradient(circle at top, rgba(13, 21, 42, 0.9), rgba(2, 4, 12, 0.95));
+  color: #dbe7ff;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.sandbox-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 2rem;
+  border-bottom: 1px solid rgba(89, 114, 201, 0.25);
+  backdrop-filter: blur(14px);
+  background: rgba(6, 12, 28, 0.7);
+  z-index: 2;
+}
+
+.sandbox-header h1 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #f8fbff;
+}
+
+.sandbox-header p {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  color: rgba(210, 222, 255, 0.65);
+}
+
+.sandbox-return {
+  padding: 0.45rem 1.1rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(132, 160, 255, 0.35);
+  background: linear-gradient(135deg, rgba(65, 88, 208, 0.2), rgba(200, 80, 192, 0.25));
+  color: #eaf1ff;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.sandbox-return:hover {
+  border-color: rgba(183, 205, 255, 0.75);
+  box-shadow: 0 0 16px rgba(82, 123, 255, 0.25);
+}
+
+.sandbox-stage {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+}
+
+.sandbox-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sandbox-instructions {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, rgba(8, 11, 23, 0.35), rgba(4, 7, 18, 0.85));
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.sandbox-instructions-card {
+  padding: 2rem 2.6rem;
+  border-radius: 1.25rem;
+  background: rgba(10, 18, 36, 0.85);
+  border: 1px solid rgba(111, 162, 255, 0.35);
+  box-shadow: 0 20px 60px rgba(24, 36, 84, 0.45);
+  text-align: center;
+  pointer-events: none;
+}
+
+.sandbox-instructions-card h2 {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 600;
+  color: #f0f5ff;
+}
+
+.sandbox-instructions-card p {
+  margin: 0.75rem auto 1.5rem;
+  max-width: 320px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: rgba(211, 223, 255, 0.72);
+}
+
+.sandbox-enter {
+  padding: 0.6rem 1.4rem;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #54b6ff, #b387ff);
+  color: #050912;
+  border: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  pointer-events: all;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.sandbox-enter:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(88, 159, 255, 0.45);
+}
