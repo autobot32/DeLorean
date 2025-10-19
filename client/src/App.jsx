@@ -12,6 +12,19 @@ function App() {
   const [uploadError, setUploadError] = useState(null)
   const API_BASE = (import.meta?.env?.VITE_API_BASE || 'http://localhost:4000').replace(/\/$/,'')
 
+  // Lightweight hash routing for three pages
+  function parseHash(){
+    const h = (window.location.hash || '').toLowerCase()
+    if (h.includes('memories')) return 'memories'
+    return 'welcome'
+  }
+  const [page, setPage] = useState(parseHash)
+  useEffect(() => {
+    const onHash = () => setPage(parseHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
   // Theme: load and persist, toggle 'dark' class on <html>
   useEffect(() => {
     const root = document.documentElement
@@ -319,10 +332,9 @@ function App() {
           <div className="flex items-center justify-between rounded-2xl border border-slate-200/80 bg-white/80 px-4 py-3 backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/60">
             <div className="font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-neon-cyan via-neon-pink to-neon-violet">DeLorean</div>
             <div className="flex items-center gap-2">
-              <nav className="hidden sm:flex items-center gap-4 text-slate-500 dark:text-slate-400" aria-label="Primary">
-                <a className="hover:text-slate-900 dark:hover:text-slate-100" href="#how">How It Works</a>
-                <a className="hover:text-slate-900 dark:hover:text-slate-100" href="#memories">Memories</a>
-                <a className="hover:text-slate-900 dark:hover:text-slate-100" href="#upload">Upload</a>
+              <nav className="hidden sm:flex items-center gap-3 text-slate-600 dark:text-slate-400" aria-label="Primary">
+                <a href="#/welcome" className={(page==='welcome'?'text-slate-900 dark:text-slate-100 ': '') + 'rounded-md px-2 py-1 hover:text-slate-900 dark:hover:text-slate-100'}>Welcome</a>
+                <a href="#/memories" className={(page==='memories'?'text-slate-900 dark:text-slate-100 ': '') + 'rounded-md px-2 py-1 hover:text-slate-900 dark:hover:text-slate-100'}>Memories</a>
               </nav>
               <button onClick={toggleTheme} className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700" aria-label="Toggle theme">
                 {theme === 'dark' ? 'Light' : 'Dark'}
@@ -332,43 +344,101 @@ function App() {
         </div>
       </div>
 
-      {/* Hero */}
-      <section id="about" className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-gradient-to-b from-[#fde9ff] to-transparent px-6 py-8 dark:border-slate-800/80 dark:from-[#0f1d3a]">
-        <h1 className="m-0 text-3xl sm:text-4xl font-bold">Step Back Through Time</h1>
-        <p className="mt-2 max-w-2xl text-slate-700 dark:text-slate-300">Build a tunnel of your memories. Preview them here, then upload more to grow your story.</p>
-        <div className="mt-4 flex flex-wrap gap-3">
-          <a className="animate-glow inline-flex items-center justify-center rounded-lg border border-pink-300/50 bg-gradient-to-r from-neon-pink via-neon-violet to-neon-cyan px-4 py-2 font-semibold text-white shadow-lg hover:ring-2 hover:ring-pink-300/40" href="#upload">Upload Photos</a>
-          <a className="inline-flex items-center justify-center rounded-lg border border-cyan-400/40 bg-cyan-100/60 px-4 py-2 text-cyan-900 hover:ring-2 hover:ring-cyan-400/30 dark:border-cyan-400/30 dark:bg-cyan-900/20 dark:text-cyan-200" href="#how">How it works</a>
-        </div>
-      </section>
+      {/* Welcome Page with arrows and CTA */}
+      {page === 'welcome' && (
+        <section id="welcome" className="relative px-6 py-20 text-center space-y-16">
+          {/* Big DeLorean title without a box */}
+          <h1 className="m-0 text-7xl sm:text-8xl font-extrabold leading-tight tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-neon-cyan via-neon-pink to-neon-violet">DeLorean</h1>
 
-      <section id="how" className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/50">
-        <h2 className="mb-2 text-lg font-semibold">How It Works</h2>
-        <ol className="grid gap-3 md:grid-cols-3" aria-label="How DeLorean works">
-          <li className="flex items-start gap-3 rounded-xl border border-pink-300/30 bg-white/80 p-3 dark:border-pink-400/20 dark:bg-slate-900/70">
-            <StepIcon number={1} />
-            <div>
-              <h3 className="m-0 text-base font-semibold">Collect</h3>
-              <p className="m-0 text-sm text-slate-600 dark:text-slate-400">Choose photos that mark meaningful moments — trips, celebrations, or everyday snapshots.</p>
-            </div>
-          </li>
-          <li className="flex items-start gap-3 rounded-xl border border-pink-300/30 bg-white/80 p-3 dark:border-pink-400/20 dark:bg-slate-900/70">
-            <StepIcon number={2} />
-            <div>
-              <h3 className="m-0 text-base font-semibold">Arrange</h3>
-              <p className="m-0 text-sm text-slate-600 dark:text-slate-400">DeLorean maps them along a timeline, preparing an immersive tunnel of your past.</p>
-            </div>
-          </li>
-          <li className="flex items-start gap-3 rounded-xl border border-pink-300/30 bg-white/80 p-3 dark:border-pink-400/20 dark:bg-slate-900/70">
-            <StepIcon number={3} />
-            <div>
-              <h3 className="m-0 text-base font-semibold">Experience</h3>
-              <p className="m-0 text-sm text-slate-600 dark:text-slate-400">Glide through your memories as visuals and context surround you in motion.</p>
-            </div>
-          </li>
-        </ol>
-      </section>
+          {/* Down arrow to Step Back Through Time */}
+          <div className="mt-16 flex justify-center">
+            <ArrowDown />
+          </div>
 
+          {/* Step Back Through Time section (no extra buttons) */}
+          <div id="step" className="mt-10 min-h-[60vh] flex flex-col items-center justify-center space-y-4">
+            <h2 className="m-0 text-4xl sm:text-5xl font-bold">Step Back Through Time</h2>
+            <p className="mx-auto mt-3 max-w-2xl text-lg text-slate-700 dark:text-slate-300">Build a pathway of your memories from the past to present.</p>
+          </div>
+
+          {/* Arrow to How It Works */}
+          <div className="mt-20 flex justify-center">
+            <ArrowDown />
+          </div>
+
+          {/* How It Works content inline on the welcome page */}
+          <div id="how" className="mt-10 min-h-[70vh] rounded-2xl border border-slate-200/80 bg-white/80 p-8 text-left backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/50">
+            <h3 className="mb-4 text-3xl sm:text-4xl font-semibold text-center">How It Works</h3>
+            <ol className="grid gap-3 md:grid-cols-3" aria-label="How DeLorean works">
+              <li className="flex items-start gap-3 rounded-xl border border-pink-300/30 bg-white/80 p-3 dark:border-pink-400/20 dark:bg-slate-900/70">
+                <StepIcon number={1} />
+                <div>
+                  <h4 className="m-0 text-base font-semibold">Collect</h4>
+                  <p className="m-0 text-sm text-slate-600 dark:text-slate-400">Choose photos that mark meaningful moments — trips, celebrations, everyday snapshots.</p>
+                </div>
+              </li>
+              <li className="flex items-start gap-3 rounded-xl border border-pink-300/30 bg-white/80 p-3 dark:border-pink-400/20 dark:bg-slate-900/70">
+                <StepIcon number={2} />
+                <div>
+                  <h4 className="m-0 text-base font-semibold">Arrange</h4>
+                  <p className="m-0 text-sm text-slate-600 dark:text-slate-400">We prepare a flowing pathway that spans your past to present.</p>
+                </div>
+              </li>
+              <li className="flex items-start gap-3 rounded-xl border border-pink-300/30 bg-white/80 p-3 dark:border-pink-400/20 dark:bg-slate-900/70">
+                <StepIcon number={3} />
+                <div>
+                  <h4 className="m-0 text-base font-semibold">Experience</h4>
+                  <p className="m-0 text-sm text-slate-600 dark:text-slate-400">Glide through your memories with ambient motion, light, and narration.</p>
+                </div>
+              </li>
+            </ol>
+
+            {/* More details about the site */}
+            <div className="mt-6 grid gap-4 md:grid-cols-3">
+              <div className="rounded-xl border border-cyan-400/30 bg-cyan-500/10 p-4 text-cyan-100">
+                <h4 className="m-0 mb-2 text-base font-semibold text-cyan-100">Features</h4>
+                <ul className="m-0 list-disc space-y-1 pl-5 text-sm text-cyan-50/90">
+                  <li>Add photos directly from each card with “Add Photo”.</li>
+                  <li>Instant on-device previews; no page reloads.</li>
+                  <li>Uploads are sent to the local API at {API_BASE} and appear in the grid.</li>
+                </ul>
+              </div>
+              <div className="rounded-xl border border-pink-400/30 bg-pink-500/10 p-4 text-pink-100">
+                <h4 className="m-0 mb-2 text-base font-semibold text-pink-100">Privacy & Control</h4>
+                <ul className="m-0 list-disc space-y-1 pl-5 text-sm text-pink-50/90">
+                  <li>Server runs locally; images are stored under <code className="text-pink-200">/uploads</code>.</li>
+                  <li>Use the “A-” button to remove an item; it also calls DELETE on the API.</li>
+                  <li>“Reset” restores placeholders without touching server files.</li>
+                </ul>
+              </div>
+              <div className="rounded-xl border border-indigo-400/30 bg-indigo-500/10 p-4 text-indigo-100">
+                <h4 className="m-0 mb-2 text-base font-semibold text-indigo-100">Compatibility & Tips</h4>
+                <ul className="m-0 list-disc space-y-1 pl-5 text-sm text-indigo-50/90">
+                  <li>Supports JPG, PNG, WEBP, and GIF (up to 10MB each).</li>
+                  <li>Works best in modern browsers; theme toggle is top-right.</li>
+                  <li>If the server is offline, previews still work; they sync when online.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          {/* Arrow to CTA */}
+          <div className="mt-20 flex justify-center">
+            <ArrowDown />
+          </div>
+
+          {/* Bottom CTA to Memories page */}
+          <div id="cta" className="mt-12 mb-24 min-h-[40vh] flex items-center justify-center">
+            <a className="animate-glow inline-flex items-center justify-center rounded-lg border border-pink-300/50 bg-gradient-to-r from-neon-pink via-neon-violet to-neon-cyan px-8 py-3 text-lg font-semibold text-white shadow-lg hover:ring-2 hover:ring-pink-300/40" href="#/memories">
+              Create Your Pathway
+            </a>
+          </div>
+        </section>
+      )}
+
+      
+
+      {page === 'memories' && (
       <section id="memories" className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-transparent p-5 dark:border-slate-800/80">
         {/* Starry space background just for this section */}
         <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
@@ -379,18 +449,36 @@ function App() {
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">Memories Preview</h2>
           <div className="flex gap-2">
-            <button className="inline-flex items-center rounded-lg border border-pink-300/40 bg-gradient-to-r from-neon-pink to-neon-violet px-3 py-2 text-sm font-semibold text-white hover:ring-2 hover:ring-pink-300/30" onClick={() => fileInputRef.current?.click()}>Add Photos</button>
             <button className="inline-flex items-center rounded-lg border border-cyan-400/40 bg-cyan-100/60 px-3 py-2 text-sm font-semibold text-cyan-900 hover:ring-2 hover:ring-cyan-400/30 dark:border-cyan-400/30 dark:bg-cyan-900/20 dark:text-cyan-200" onClick={clearAll}>Reset</button>
           </div>
-        </div>
+          <input ref={fileInputRef} className="hidden" type="file" accept="image/*" multiple onChange={onFileChange} /></div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {memories.map(m => (
             <article key={m.id} className="overflow-hidden rounded-xl border border-slate-200/60 bg-white/5 shadow-sm backdrop-blur-sm dark:border-slate-700/70 dark:bg-slate-900/20">
               <div className="relative aspect-[16/10] grid place-items-center bg-black/20 dark:bg-black/30" aria-label={m.title} role="img">
                 {m.objectUrl || m.url ? (
-                  <img className="h-full w-full object-cover" src={m.url || m.objectUrl} alt={m.title} />
+                  <>
+                    <img className="h-full w-full object-cover" src={m.url || m.objectUrl} alt={m.title} />
+                    <button
+                      type="button"
+                      title="Add Photo"
+                      className="absolute left-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-pink-300/60 bg-white/95 text-slate-900 hover:bg-white dark:border-pink-500 dark:bg-slate-900/80 dark:text-slate-100"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      +
+                    </button>
+                  </>
                 ) : (
-                  <div className="h-[76%] w-[92%] rounded-lg border border-dashed border-pink-300/50 bg-gradient-to-br from-white/10 to-white/5 dark:border-slate-600 dark:from-white/10 dark:to-transparent" aria-hidden="true" />
+                  <>
+                    <div className="h-[76%] w-[92%] rounded-lg border border-dashed border-pink-300/50 bg-gradient-to-br from-white/10 to-white/5 dark:border-slate-600 dark:from-white/10 dark:to-transparent" aria-hidden="true" />
+                    <button
+                      type="button"
+                      className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md border border-pink-300/50 bg-gradient-to-r from-neon-pink to-neon-violet px-3 py-1.5 text-sm font-semibold text-white shadow hover:ring-2 hover:ring-pink-300/30"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      Add Photo
+                    </button>
+                  </>
                 )}
                 <button className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-pink-300/60 bg-white/95 text-slate-900 hover:bg-white dark:border-pink-500 dark:bg-slate-900/80 dark:text-slate-100" onClick={() => removeMemory(m.id)} title="Remove">×</button>
               </div>
@@ -402,41 +490,9 @@ function App() {
           ))}
         </div>
       </section>
+      )}
 
-      <section id="upload" className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/60">
-        <h2 className="mb-1 text-lg font-semibold">Upload Photos</h2>
-        <p className="mb-3 text-sm text-slate-600 dark:text-slate-400">Drag and drop images anywhere in the box, or pick files to add them to your grid. Files are uploaded to the local API at {API_BASE} and become available under /uploads.</p>
-        <div
-          className={
-            `relative grid place-items-center rounded-xl border border-dashed px-6 py-10 transition-all ` +
-            (isDropping ? 'border-pink-400/70 bg-pink-50/60 ring-2 ring-pink-300/30 dark:border-pink-400/70 dark:bg-pink-500/10' : 'border-slate-300 bg-slate-50 dark:border-slate-700 dark:bg-slate-950/40')
-          }
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          onDrop={onDrop}
-        >
-          <div className="flex items-center gap-4 text-slate-700 dark:text-slate-300">
-            <UploadIcon />
-            <div className="space-y-1">
-              <div><strong>Drag & drop</strong> images here</div>
-              <div className="text-slate-500 dark:text-slate-400">or</div>
-              <button className="inline-flex items-center justify-center rounded-lg border border-pink-300/40 bg-gradient-to-r from-neon-pink to-neon-violet px-3 py-2 text-sm font-semibold text-white hover:ring-2 hover:ring-pink-300/30" onClick={() => fileInputRef.current?.click()}>Choose files</button>
-            </div>
-          </div>
-          <input ref={fileInputRef} className="hidden" type="file" accept="image/*" multiple onChange={onFileChange} />
-          {isUploading && (
-            <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-center gap-2 rounded-md border border-cyan-400/30 bg-cyan-500/10 px-2 py-1 text-xs text-cyan-200">
-              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-cyan-300"></span>
-              Uploading…
-            </div>
-          )}
-          {uploadError && (
-            <div className="absolute inset-x-3 bottom-3 rounded-md border border-pink-400/40 bg-pink-500/10 px-2 py-1 text-xs text-pink-200">
-              {uploadError}
-            </div>
-          )}
-        </div>
-      </section>
+      
       </div>
     </main>
   )
@@ -452,6 +508,15 @@ function StepIcon({ number }){
     >
       {number}
     </span>
+  )
+}
+
+function ArrowDown(){
+  return (
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+      <path d="M12 4v14" stroke="#9bd7ff" strokeWidth="1.8" strokeLinecap="round"/>
+      <path d="M7.5 13.5 12 18l4.5-4.5" stroke="#79e9ff" strokeWidth="1.8" strokeLinecap="round"/>
+    </svg>
   )
 }
 
