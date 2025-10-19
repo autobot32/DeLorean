@@ -11,6 +11,7 @@ const multer = require('multer');
 const sharp = require('sharp');
 const heicConvert = require('heic-convert');
 
+// Configuration
 const PORT = process.env.PORT || 4000;
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 const allowedOrigins = CLIENT_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean);
