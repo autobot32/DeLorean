@@ -4,6 +4,7 @@ const { randomUUID } = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
+const sharp = require('sharp');
 
 const PORT = process.env.PORT || 4000;
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
@@ -31,21 +32,7 @@ app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 app.use('/uploads', express.static(UPLOADS_DIR));
 
-const SUPPORTED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
-
-const storage = multer.diskStorage({
-  destination: (_, __, cb) => {
-    cb(null, UPLOADS_DIR);
-  },
-  filename: (_, file, cb) => {
-    const timestamp = Date.now();
-    const ext = path.extname(file.originalname).toLowerCase();
-    const baseName = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32) || 'image';
-    const uniqueName = `${baseName}-${timestamp}-${Math.round(Math.random() * 1e6)}${ext || '.jpg'}`;
-    cb(null, uniqueName);
-  },
-});
-
+const storage = multer.memoryStorage();
 const upload = multer({
   storage,
   limits: {
@@ -53,10 +40,10 @@ const upload = multer({
     fileSize: 10 * 1024 * 1024, // 10MB
   },
   fileFilter: (_, file, cb) => {
-    if (SUPPORTED_MIME_TYPES.has(file.mimetype)) {
+    if (file?.mimetype?.startsWith('image/')) {
       cb(null, true);
     } else {
-      cb(new Error('Only JPG, PNG, WEBP, or GIF images are supported.'));
+      cb(new Error('Only image uploads are supported.'));
     }
   },
 });
@@ -83,38 +70,66 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-app.post('/api/uploads', upload.array('images', 20), (req, res) => {
+app.post('/api/uploads', upload.array('images', 20), async (req, res, next) => {
   if (!req.files || req.files.length === 0) {
     return res.status(400).json({ error: 'No images received.' });
   }
 
-  const manifest = readStoredUploads();
-  const now = Date.now();
+  try {
+    const manifest = readStoredUploads();
+    const now = Date.now();
+    const createdEntries = [];
 
-  const newEntries = req.files.map((file, index) => {
-    const record = {
-      id: randomUUID(),
-      originalName: file.originalname,
-      mimeType: file.mimetype,
-      size: file.size,
-      filename: file.filename,
-      relativePath: `/uploads/${file.filename}`,
-      order: manifest.length + index,
-      createdAt: now,
-    };
+    for (const file of req.files) {
+      const timestamp = Date.now();
+      const randomSuffix = Math.round(Math.random() * 1e6);
+      const baseName = path
+        .basename(file.originalname, path.extname(file.originalname))
+        .replace(/[^a-zA-Z0-9_-]/g, '')
+        .slice(0, 32) || 'image';
+      const filename = `${baseName}-${timestamp}-${randomSuffix}.webp`;
+      const targetPath = path.join(UPLOADS_DIR, filename);
 
-    manifest.push(record);
-    return record;
-  });
+      let outputInfo;
+      try {
+        outputInfo = await sharp(file.buffer, { failOnError: false })
+          .rotate()
+          .webp({ quality: 90 })
+          .toFile(targetPath);
+      } catch (error) {
+        throw new Error(`Failed to process image ${file.originalname}: ${error.message}`);
+      }
 
-  writeStoredUploads(manifest);
+      const record = {
+        id: randomUUID(),
+        originalName: file.originalname,
+        originalMimeType: file.mimetype,
+        mimeType: 'image/webp',
+        size: outputInfo.size,
+        width: outputInfo.width ?? null,
+        height: outputInfo.height ?? null,
+        filename,
+        relativePath: `/uploads/${filename}`,
+        order: manifest.length,
+        createdAt: now,
+      };
 
-  const responseEntries = newEntries.map((record) => ({
-    ...record,
-    url: `${req.protocol}://${req.get('host')}${record.relativePath}`,
-  }));
+      manifest.push(record);
+      createdEntries.push({
+        ...record,
+        url: `${req.protocol}://${req.get('host')}${record.relativePath}`,
+      });
+    }
 
-  return res.status(201).json({ assets: responseEntries });
+    writeStoredUploads(manifest);
+
+    return res.status(201).json({
+      assets: createdEntries,
+      stored: createdEntries,
+    });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 app.get('/api/uploads', (req, res) => {
@@ -124,6 +139,34 @@ app.get('/api/uploads', (req, res) => {
     url: `${req.protocol}://${req.get('host')}${record.relativePath}`,
   }));
   res.json({ assets });
+});
+
+app.delete('/api/uploads/:id', (req, res) => {
+  const manifest = readStoredUploads();
+  const index = manifest.findIndex((record) => record.id === req.params.id);
+
+  if (index === -1) {
+    return res.status(404).json({ error: 'Upload not found.' });
+  }
+
+  const [removed] = manifest.splice(index, 1);
+  writeStoredUploads(manifest);
+
+  try {
+    const filePath = path.join(UPLOADS_DIR, removed.filename);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch (error) {
+    console.warn(`Failed to delete file ${removed.filename}:`, error);
+  }
+
+  return res.status(200).json({
+    removed: {
+      ...removed,
+      url: `${req.protocol}://${req.get('host')}${removed.relativePath}`,
+    },
+  });
 });
 
 app.get('/api/message', (req, res) => {
