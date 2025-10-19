@@ -18,6 +18,7 @@ function App() {
     return sampleMemories()
   })
   const fileInputRef = useRef(null)
+  const pendingContextRef = useRef('')
   const [isDropping, setIsDropping] = useState(false)
   const [theme, setTheme] = useState('dark')
   const starCanvasRef = useRef(null)
@@ -32,14 +33,21 @@ function App() {
   })
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [analyzeError, setAnalyzeError] = useState(null)
+  const [createContextDraft, setCreateContextDraft] = useState('')
   const [storyText, setStoryText] = useState('')
-  const [storyAudio, setStoryAudio] = useState(null)
-  const [isNarrating, setIsNarrating] = useState(false)
   const API_BASE = (import.meta?.env?.VITE_API_BASE || 'http://localhost:4000').replace(/\/$/,'')
+
+  const ordinalLabel = (n) => {
+    const suffixes = ['th', 'st', 'nd', 'rd']
+    const v = n % 100
+    const suffix = suffixes[(v - 20) % 10] || suffixes[v] || suffixes[0]
+    return `${n}${suffix}`
+  }
 
   // Lightweight hash routing for three pages
   function parseHash(){
     const h = (window.location.hash || '').toLowerCase()
+    if (h.includes('create')) return 'create'
     if (h.includes('memories')) return 'memories'
     return 'welcome'
   }
@@ -210,11 +218,26 @@ function App() {
         const data = await res.json()
         if(cancelled) return
         if (Array.isArray(data.assets)){
-          const items = data.assets.map(a => ({ id: a.id || a.filename, title: a.originalName || a.filename, meta: new Date(a.createdAt || Date.now()).toLocaleDateString(), url: a.url }))
+          const items = data.assets.map(a => ({
+            id: a.id || a.filename,
+            title: a.originalName || a.filename,
+            meta: new Date(a.createdAt || Date.now()).toLocaleDateString(),
+            url: a.url,
+            context: typeof a.context === 'string' ? a.context : ''
+          }))
           setMemories(prev => {
             const seen = new Set(items.map(i => i.url))
             const filteredPrev = prev.filter(p => !p.url || !seen.has(p.url))
             return [...items, ...filteredPrev]
+          })
+          setPrompts(prev => {
+            const base = { ...(prev || {}) }
+            for (const asset of items){
+              if (asset.id && asset.context){
+                base[asset.id] = asset.context
+              }
+            }
+            return base
           })
         }
       }catch(err){
@@ -266,17 +289,30 @@ function App() {
   function addFiles(files){
     const next = []
     const tempIds = []
+    const newPrompts = {}
+    const pendingContext = (pendingContextRef.current || '').trim()
     for (const file of files){
       if (!file.type.startsWith('image/')) continue
       const objectUrl = URL.createObjectURL(file)
       const id = `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2,7)}`
       tempIds.push(id)
       next.push({ id, title: file.name, meta: new Date(file.lastModified).toLocaleDateString(), objectUrl })
+      if (pendingContext) newPrompts[id] = pendingContext
     }
     if (next.length){
       setMemories(prev => [...next, ...prev])
+      if (Object.keys(newPrompts).length){
+        setPrompts(prev => {
+          const base = { ...(prev || {}) }
+          for (const [id, value] of Object.entries(newPrompts)){
+            base[id] = value
+          }
+          return base
+        })
+      }
+      pendingContextRef.current = ''
       // Upload then replace temps with server-backed entries
-      uploadToServer(files, tempIds)
+      uploadToServer(files, tempIds, newPrompts)
     }
   }
 
@@ -331,7 +367,7 @@ function App() {
     })
   }
 
-  async function uploadToServer(fileList, tempIds = []){
+  async function uploadToServer(fileList, tempIds = [], batchPrompts = {}){
     try{
       setUploadError(null)
       setIsUploading(true)
@@ -344,8 +380,8 @@ function App() {
           form.append('images', file)
           count++
           const tid = tempIds?.[i]
-          const p = tid ? (prompts[tid] || '') : ''
-          contexts.push((p || '').trim())
+          const basePrompt = tid ? (batchPrompts[tid] ?? prompts[tid] ?? '') : ''
+          contexts.push((basePrompt || '').trim())
           i++
         }
       }
@@ -392,32 +428,10 @@ function App() {
       if (!res.ok) throw new Error(`Analyze failed: ${res.status}`)
       const data = await res.json()
       setStoryText(typeof data.story === 'string' ? data.story : '')
-      setStoryAudio(null)
     }catch(err){
       setAnalyzeError(err.message || 'Analyze failed')
     }finally{
       setIsAnalyzing(false)
-    }
-  }
-
-  async function narrateAll(){
-    try{
-      setAnalyzeError(null)
-      setIsNarrating(true)
-      const items = memories
-        .filter(m => m.id && (prompts[m.id]?.trim() || storyText?.trim()))
-        .map(m => ({ id: m.id, context: (prompts[m.id] || '').trim() }))
-      const res = await fetch(`${API_BASE}/api/narrate`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memories: items })
-      })
-      if (!res.ok) throw new Error(`Narrate failed: ${res.status}`)
-      const data = await res.json()
-      if (typeof data.story === 'string') setStoryText(data.story)
-      if (typeof data.audio === 'string') setStoryAudio(`${API_BASE}${data.audio}`)
-    }catch(err){
-      setAnalyzeError(err.message || 'Narration failed')
-    }finally{
-      setIsNarrating(false)
     }
   }
 
@@ -440,6 +454,7 @@ function App() {
             <div className="flex items-center gap-2">
               <nav className="hidden sm:flex items-center gap-3 text-slate-600 dark:text-slate-400" aria-label="Primary">
                 <a href="#/welcome" className={(page==='welcome'?'text-slate-900 dark:text-slate-100 ': '') + 'rounded-md px-2 py-1 hover:text-slate-900 dark:hover:text-slate-100'}>Welcome</a>
+                <a href="#/create" className={(page==='create'?'text-slate-900 dark:text-slate-100 ': '') + 'rounded-md px-2 py-1 hover:text-slate-900 dark:hover:text-slate-100'}>Create New Pathway</a>
                 <a href="#/memories" className={(page==='memories'?'text-slate-900 dark:text-slate-100 ': '') + 'rounded-md px-2 py-1 hover:text-slate-900 dark:hover:text-slate-100'}>Memories</a>
               </nav>
               <button onClick={toggleTheme} className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700" aria-label="Toggle theme">
@@ -449,6 +464,8 @@ function App() {
           </div>
         </div>
       </div>
+
+      <input ref={fileInputRef} className="hidden" type="file" accept="image/*" multiple onChange={onFileChange} />
 
       {/* Welcome Page with arrows and CTA */}
       {page === 'welcome' && (
@@ -507,16 +524,65 @@ function App() {
             <ArrowDown />
           </div>
 
-          {/* Bottom CTA to Memories page */}
+          {/* Bottom CTA to Create page */}
           <div id="cta" className="reveal delay-700 mt-12 mb-24 min-h-[40vh] flex items-center justify-center">
-            <a className="animate-glow inline-flex items-center justify-center rounded-lg border border-pink-300/50 bg-gradient-to-r from-neon-pink via-neon-violet to-neon-cyan px-8 py-3 text-lg font-semibold text-white shadow-lg hover:ring-2 hover:ring-pink-300/40" href="#/memories">
+            <a className="animate-glow inline-flex items-center justify-center rounded-lg border border-pink-300/50 bg-gradient-to-r from-neon-pink via-neon-violet to-neon-cyan px-8 py-3 text-lg font-semibold text-white shadow-lg hover:ring-2 hover:ring-pink-300/40" href="#/create">
               Create Your Pathway
             </a>
           </div>
         </section>
       )}
 
-      
+      {page === 'create' && (
+        <section id="create" className="rounded-2xl border border-slate-200/80 bg-white/80 p-6 backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/50">
+          <h2 className="mb-3 text-xl font-semibold">Create New Pathway</h2>
+          <div className="mb-4 rounded-xl border border-cyan-400/30 bg-cyan-100/60 p-4 text-sm text-cyan-900 dark:border-cyan-400/30 dark:bg-cyan-900/20 dark:text-cyan-100">
+            <p className="m-0">1. Add a set of photos that belong to this pathway. 2. Give them context so the story generator can understand why the moment matters. 3. Visit the Memories tab later to review and analyze your saved pathway.</p>
+          </div>
+
+          <div className="mb-4 flex flex-col gap-3">
+            <div
+              className={`grid h-64 place-items-center rounded-2xl border-2 border-dashed p-6 text-center transition ${isDropping ? 'border-pink-400/70 bg-pink-50/60 dark:border-pink-400/70 dark:bg-pink-500/10' : 'border-pink-300/50 bg-white/70 dark:border-pink-400/40 dark:bg-slate-900/40'}`}
+              onDragOver={onDragOver}
+              onDragLeave={onDragLeave}
+              onDrop={(e) => {
+                pendingContextRef.current = createContextDraft
+                onDrop(e)
+              }}
+            >
+              <div className="space-y-2">
+                <p className="m-0 text-sm text-slate-600 dark:text-slate-300">Drop photos here or use the button below. All uploads stay on your local server.</p>
+                <button
+                  className="inline-flex items-center justify-center rounded-lg border border-pink-300/50 bg-gradient-to-r from-neon-pink via-neon-violet to-neon-cyan px-4 py-2 text-sm font-semibold text-white shadow hover:ring-2 hover:ring-pink-300/40"
+                  onClick={() => {
+                    pendingContextRef.current = createContextDraft
+                    fileInputRef.current?.click()
+                  }}
+                >
+                  Choose Photos
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200/70 bg-white/80 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+              <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200" htmlFor="create-context">Context for this pathway</label>
+              <textarea
+                id="create-context"
+                rows={4}
+                value={createContextDraft}
+                onChange={(e) => setCreateContextDraft(e.target.value)}
+                placeholder="Describe where, when, who, and why this set of memories matters. We'll prefill new uploads with this context so you can refine in Memories."
+                className="w-full rounded-md border border-slate-300/70 bg-white/90 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-pink-300/40 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-100"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <a href="#/memories" className="inline-flex items-center justify-center rounded-lg border border-pink-300/50 bg-gradient-to-r from-neon-pink via-neon-violet to-neon-cyan px-4 py-2 text-white font-semibold shadow hover:ring-2 hover:ring-pink-300/40">View Saved Memories</a>
+            <button className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700" onClick={() => { window.location.hash = '#/memories' }}>Go to Memories Workspace</button>
+          </div>
+        </section>
+      )}
 
       {page === 'memories' && (
       <section id="memories" className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-transparent p-5 dark:border-slate-800/80">
@@ -539,8 +605,8 @@ function App() {
             </button>
             <button className="inline-flex items-center rounded-lg border border-cyan-400/40 bg-cyan-100/60 px-3 py-2 text-sm font-semibold text-cyan-900 hover:ring-2 hover:ring-cyan-400/30 dark:border-cyan-400/30 dark:bg-cyan-900/20 dark:text-cyan-200" onClick={clearAll}>Reset</button>
           </div>
-          <input ref={fileInputRef} className="hidden" type="file" accept="image/*" multiple onChange={onFileChange} />
         </div>
+        <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">Saved pathways appear here. Click a memory to review its details, update the context, or generate a new story.</p>
         {(analyzeError || storyText) && (
           <div className="mb-4 rounded-xl border border-slate-200/70 bg-white/80 p-4 backdrop-blur dark:border-slate-700 dark:bg-slate-900/50">
             <div className="mb-2 flex items-center justify-between gap-2">
@@ -556,31 +622,16 @@ function App() {
           </div>
         )}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {memories.map(m => (
+          {memories.map((m, index) => (
             <article key={m.id} className="overflow-hidden rounded-xl border border-slate-200/60 bg-white/5 shadow-sm backdrop-blur-sm dark:border-slate-700/70 dark:bg-slate-900/20">
               <div className="relative aspect-[16/10] grid place-items-center bg-black/20 dark:bg-black/30" aria-label={m.title} role="img">
                 {m.objectUrl || m.url ? (
                   <>
                     <img className="h-full w-full object-cover" src={m.url || m.objectUrl} alt={m.title} />
-                    <button
-                      type="button"
-                      title="Add Photo"
-                      className="absolute left-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-pink-300/60 bg-white/95 text-slate-900 hover:bg-white dark:border-pink-500 dark:bg-slate-900/80 dark:text-slate-100"
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      +
-                    </button>
                   </>
                 ) : (
                   <>
                     <div className="h-[76%] w-[92%] rounded-lg border border-dashed border-pink-300/50 bg-gradient-to-br from-white/10 to-white/5 dark:border-slate-600 dark:from-white/10 dark:to-transparent" aria-hidden="true" />
-                    <button
-                      type="button"
-                      className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md border border-pink-300/50 bg-gradient-to-r from-neon-pink to-neon-violet px-3 py-1.5 text-sm font-semibold text-white shadow hover:ring-2 hover:ring-pink-300/30"
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      Add Photo
-                    </button>
                   </>
                 )}
                 <button className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-pink-300/60 bg-white/95 text-slate-900 hover:bg-white dark:border-pink-500 dark:bg-slate-900/80 dark:text-slate-100" onClick={() => removeMemory(m.id)} title="Remove">×</button>
@@ -590,13 +641,12 @@ function App() {
                 {m.meta && <span className="text-xs text-slate-500 dark:text-slate-400">{m.meta}</span>}
               </div>
               <div className="px-3 pb-3">
-                <input
-                  type="text"
-                  value={prompts[m.id] || ''}
-                  onChange={e => setPrompts(prev => ({ ...(prev||{}), [m.id]: e.target.value }))}
-                  placeholder="Add context (where/when/people, feelings, purpose)"
-                  className="w-full rounded-md border border-slate-300/70 bg-white/80 px-2 py-1.5 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-pink-300/40 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-100"
-                />
+                <button
+                  type="button"
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                >
+                  {`${ordinalLabel(index + 1)} Pathway Experience`}
+                </button>
               </div>
             </article>
           ))}
@@ -628,16 +678,6 @@ function ArrowDown(){
     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
       <path d="M12 4v14" stroke="#9bd7ff" strokeWidth="2.2" strokeLinecap="round"/>
       <path d="M7.5 13.5 12 18l4.5-4.5" stroke="#79e9ff" strokeWidth="2.2" strokeLinecap="round"/>
-    </svg>
-  )
-}
-
-function UploadIcon(){
-  return (
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-      <path d="M12 16V4" stroke="#79e9ff" strokeWidth="1.6" strokeLinecap="round"/>
-      <path d="M8.5 7.5L12 4l3.5 3.5" stroke="#79e9ff" strokeWidth="1.6" strokeLinecap="round"/>
-      <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke="#3a91aa" strokeWidth="1.6" strokeLinecap="round"/>
     </svg>
   )
 }

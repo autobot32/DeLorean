@@ -20,3 +20,13 @@ html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
 /* Scroll reveal utilities */
 .reveal { opacity: 0; transform: translateY(16px); transition: opacity 700ms ease-out, transform 700ms ease-out; will-change: opacity, transform; }
 .reveal.is-visible { opacity: 1; transform: translateY(0); }
+
+/* How It Works: remove extra whitespace so cards fill naturally */
+#how { min-height: auto; padding: 1rem; }
+#how h3 { margin-bottom: 0.5rem; }
+#how ol { display: grid; grid-auto-rows: auto; gap: 0.75rem; }
+#how ol li { min-height: 0; display: flex; flex-direction: column; padding: 0.875rem; }
+@media (min-width: 768px) {
+  #how { min-height: auto; padding: 1rem; }
+  #how ol li { min-height: 0; padding: 1rem; }
+}
