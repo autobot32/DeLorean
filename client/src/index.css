@@ -30,3 +30,37 @@ html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
   #how { min-height: auto; padding: 1rem; }
   #how ol li { min-height: 0; padding: 1rem; }
 }
+
+/* Ambient sparkle layer behind the main view */
+.sparkle-dot {
+  position: absolute;
+  transform: translate(-50%, -50%) scale(0.85);
+  transform-origin: center;
+  border-radius: 9999px;
+  pointer-events: none;
+  background: radial-gradient(circle, var(--sparkle-color, rgba(255,255,255,0.92)) 0%, rgba(255,255,255,0.08) 55%, transparent 75%);
+  box-shadow:
+    0 0 8px var(--sparkle-glow, rgba(255,255,255,0.17)),
+    0 0 18px var(--sparkle-glow, rgba(255,255,255,0.14));
+  mix-blend-mode: screen;
+  opacity: var(--sparkle-min-opacity, 0.25);
+  animation-name: sparkle-twinkle;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-fill-mode: both;
+  will-change: opacity, transform;
+}
+
+@keyframes sparkle-twinkle {
+  0%, 100% {
+    opacity: var(--sparkle-min-opacity, 0.25);
+    transform: translate(-50%, -50%) scale(0.8);
+  }
+  45% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50% {
+    opacity: var(--sparkle-base-opacity, 0.75);
+    transform: translate(-50%, -50%) scale(1.16);
+  }
+}
