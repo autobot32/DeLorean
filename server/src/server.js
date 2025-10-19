@@ -27,7 +27,7 @@ const PLACEHOLDER_CONTEXTS = [
   'A celebration frozen in light, love, and motion.',
 ];
 
-const AUDIO_DIR = path.join(__dirname, '..', 'audio');
+const AUDIO_DIR = path.join(__dirname, 'audio');
 
 function ensureDirectories() {
   [UPLOADS_DIR, DATA_DIR, AUDIO_DIR].forEach((dir) => {
@@ -46,6 +46,17 @@ function ensureDirectories() {
 }
 
 ensureDirectories();
+
+const tunnels = new Map();
+const TUNNEL_TTL_MS = 1000 * 60 * 60 * 2; // 2 hours
+setInterval(() => {
+  const cutoff = Date.now() - TUNNEL_TTL_MS;
+  for (const [id, tunnel] of tunnels.entries()) {
+    if (!tunnel || typeof tunnel.createdAt !== 'number' || tunnel.createdAt < cutoff) {
+      tunnels.delete(id);
+    }
+  }
+}, 1000 * 60 * 30).unref?.();
 
 const app = express();
 app.use(cors({ origin: allowedOrigins, credentials: true }));
@@ -266,6 +277,21 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.post('/api/tunnels/start', (req, res) => {
+  const id = randomUUID();
+  tunnels.set(id, { assets: [], createdAt: Date.now() });
+  res.status(201).json({ tunnelId: id });
+});
+
+app.post('/api/tunnels/:tunnelId/commit', (req, res) => {
+  const { tunnelId } = req.params;
+  const tunnel = tunnels.get(tunnelId);
+  if (!tunnel) {
+    return res.status(404).json({ error: 'Tunnel not found.' });
+  }
+  res.json({ tunnelId, assets: Array.isArray(tunnel.assets) ? [...tunnel.assets] : [] });
+});
+
 app.post('/api/uploads', upload.array('images', 20), async (req, res, next) => {
   if (!req.files || req.files.length === 0) {
     return res.status(400).json({ error: 'No images received.' });
@@ -400,6 +426,44 @@ app.post('/api/uploads/:id/story', async (req, res) => {
     return res.status(410).json({ error: 'Image file is missing on the server.' });
   }
 
+  const tunnelId = req.query?.tunnelId || req.body?.tunnelId || null;
+  const baseTunnelAsset = {
+    id: record.id,
+    url: `${req.protocol}://${req.get('host')}${record.relativePath}`,
+    title: record.originalName || record.filename || '',
+    createdAt: record.createdAt || Date.now(),
+    audioUrl: null,
+  };
+  const resolveAudioUrl = (audioMeta) => {
+    if (!audioMeta || typeof audioMeta !== 'object') return null;
+    if (typeof audioMeta.relativePath === 'string' && audioMeta.relativePath.trim().length > 0) {
+      return `${req.protocol}://${req.get('host')}${audioMeta.relativePath}`;
+    }
+    if (typeof audioMeta.url === 'string' && audioMeta.url.trim().length > 0) {
+      return audioMeta.url.trim();
+    }
+    return null;
+  };
+  const enqueueTunnelAsset = (audioMeta) => {
+    if (!tunnelId || !tunnels.has(tunnelId)) {
+      return;
+    }
+    const tunnel = tunnels.get(tunnelId);
+    if (!tunnel || !Array.isArray(tunnel.assets)) {
+      return;
+    }
+    const decorated = {
+      ...baseTunnelAsset,
+      audioUrl: resolveAudioUrl(audioMeta),
+    };
+    const existingIndex = tunnel.assets.findIndex((asset) => asset.id === decorated.id);
+    if (existingIndex >= 0) {
+      tunnel.assets[existingIndex] = decorated;
+    } else {
+      tunnel.assets.push(decorated);
+    }
+  };
+
   const overrideContext =
     typeof req.body?.context === 'string' && req.body.context.trim().length > 0
       ? req.body.context.trim()
@@ -467,6 +531,7 @@ app.post('/api/uploads/:id/story', async (req, res) => {
 
   if (shouldReuse) {
     const storyResponse = decorateStory(record.story, req);
+    enqueueTunnelAsset(storyResponse?.audio);
     return res.json({
       story: storyResponse,
       asset: withPublicUrl(record, req),
@@ -566,6 +631,8 @@ app.post('/api/uploads/:id/story', async (req, res) => {
         }
       : null;
 
+    enqueueTunnelAsset(sceneRecord?.audio || record.story?.audio);
+
     return res.json({
       story: storyResponse,
       asset: withPublicUrl(record, req),
@@ -608,6 +675,108 @@ app.delete('/api/uploads/:id', (req, res) => {
 
   const [removed] = manifest.splice(index, 1);
   writeStoredUploads(manifest);
+
+  const audioCandidates = new Set();
+  const addAudioCandidate = (meta) => {
+    if (!meta || typeof meta !== 'object') return;
+    const filename =
+      (typeof meta.filename === 'string' && meta.filename.trim()) ||
+      (typeof meta.relativePath === 'string' && meta.relativePath.trim()) ||
+      (typeof meta.url === 'string' && meta.url.trim());
+    if (!filename) return;
+    const name = (() => {
+      try {
+        if (filename.startsWith('http')) {
+          const url = new URL(filename);
+          return path.basename(url.pathname);
+        }
+        return path.basename(filename);
+      } catch {
+        return path.basename(filename);
+      }
+    })();
+    if (name) {
+      audioCandidates.add(name);
+    }
+  };
+
+  addAudioCandidate(removed?.story?.audio);
+
+  const scenes = readScenes();
+  const nextScenes = [];
+  let scenesChanged = false;
+
+  for (const scene of scenes) {
+    const assetIds = Array.isArray(scene.assetIds) ? scene.assetIds : [];
+    const assets = Array.isArray(scene.assets) ? scene.assets : [];
+    const referencesAsset =
+      assetIds.includes(removed.id) || assets.some((asset) => asset?.id === removed.id);
+
+    if (!referencesAsset) {
+      nextScenes.push(scene);
+      continue;
+    }
+
+    const filteredAssetIds = assetIds.filter((assetId) => assetId !== removed.id);
+    const filteredAssets = assets.filter((asset) => asset?.id !== removed.id);
+
+    if (!filteredAssetIds.length || !filteredAssets.length) {
+      scenesChanged = true;
+      addAudioCandidate(scene.audio);
+      continue;
+    }
+
+    scenesChanged = true;
+    nextScenes.push({
+      ...scene,
+      assetIds: filteredAssetIds,
+      assets: filteredAssets,
+    });
+  }
+
+  const activeScenes = scenesChanged ? nextScenes : scenes;
+  if (scenesChanged) {
+    writeScenes(nextScenes);
+  }
+
+  const isAudioReferenced = (filename) => {
+    if (!filename) return false;
+    const matchAudio = (meta) => {
+      if (!meta || typeof meta !== 'object') return false;
+      const candidate =
+        (typeof meta.filename === 'string' && meta.filename.trim()) ||
+        (typeof meta.relativePath === 'string' && meta.relativePath.trim()) ||
+        (typeof meta.url === 'string' && meta.url.trim());
+      if (!candidate) return false;
+      try {
+        if (candidate.startsWith('http')) {
+          return path.basename(new URL(candidate).pathname) === filename;
+        }
+        return path.basename(candidate) === filename;
+      } catch {
+        return path.basename(candidate) === filename;
+      }
+    };
+
+    const referencedInManifest = manifest.some((record) => matchAudio(record?.story?.audio));
+    if (referencedInManifest) return true;
+
+    return activeScenes.some((scene) => matchAudio(scene?.audio));
+  };
+
+  audioCandidates.forEach((filename) => {
+    if (!filename || isAudioReferenced(filename)) {
+      return;
+    }
+    const audioPath = path.join(AUDIO_DIR, filename);
+    try {
+      if (fs.existsSync(audioPath)) {
+        fs.unlinkSync(audioPath);
+      }
+    } catch (error) {
+      console.warn(`Failed to delete audio file ${filename}:`, error);
+    }
+  });
 
   try {
     const filePath = path.join(UPLOADS_DIR, removed.filename);

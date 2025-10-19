@@ -36,12 +36,21 @@ function loadTexture(url, loader) {
   return loader.load(href)
 }
 
-function TunnelSandbox({ onExit, assets = [] }) {
+function TunnelSandbox({ onExit, assets = [], tunnelId }) {
   const canvasRef = useRef(null)
   const controlsRef = useRef(null)
   const [isLocked, setIsLocked] = useState(false)
   const [instructionsVisible, setInstructionsVisible] = useState(true)
   const allAudiosRef = useRef([])
+  const listenerRef = useRef(null)
+  const isLockedRef = useRef(false)
+
+  const applyCacheBust = (src) => {
+    if (!src || !tunnelId) return src
+    const token = `v=${tunnelId}`
+    if (src.includes(token)) return src
+    return src.includes('?') ? `${src}&${token}` : `${src}?${token}`
+  }
 
   const slotBlueprint = useMemo(() => buildSlotPositions(DefaultTunnel.slots), [])
 
@@ -60,9 +69,42 @@ function TunnelSandbox({ onExit, assets = [] }) {
     renderer.shadowMap.enabled = true
     renderer.shadowMap.type = THREE.PCFSoftShadowMap
 
-    const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 500)
+    const camera = new THREE.PerspectiveCamera(60, 1, 0.2, 500)
     camera.position.set(0, 2, 12)
     camera.up.set(0, 1, 0)
+    const listener = new THREE.AudioListener()
+    camera.add(listener)
+    listenerRef.current = listener
+
+    const resumeAudioContext = () => {
+      const ctx = listener.context
+      if (ctx && ctx.state === 'suspended') {
+        return ctx.resume().catch(() => {})
+      }
+      return Promise.resolve()
+    }
+
+    const tryPlayAudio = (audio) => {
+      if (!audio || audio.isPlaying || !audio.buffer) return
+      const userData = audio.userData || (audio.userData = {})
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+      if (userData.lastPlayAttempt && now - userData.lastPlayAttempt < 250) {
+        return
+      }
+      userData.lastPlayAttempt = now
+      resumeAudioContext()
+        .then(() => {
+          if (!audio.buffer || audio.isPlaying) return
+          try {
+            audio.play()
+            console.log('[audio] play', audio.userData?.resolvedUrl || '(buffer)')
+          } catch (err) {
+            console.warn('[audio] play blocked', audio.userData?.resolvedUrl || '(buffer)', err)
+          }
+        })
+        .catch(() => {})
+    }
+    let disposed = false
 
     const scene = new THREE.Scene()
     scene.background = new THREE.Color('#040712')
@@ -207,7 +249,8 @@ function TunnelSandbox({ onExit, assets = [] }) {
         return
       }
 
-      const texture = textureLoader.load(asset.url, (tex) => {
+      const textureUrl = applyCacheBust(asset.url)
+      const texture = textureLoader.load(textureUrl, (tex) => {
         tex.colorSpace = THREE.SRGBColorSpace
       })
       texture.colorSpace = THREE.SRGBColorSpace
@@ -224,23 +267,76 @@ function TunnelSandbox({ onExit, assets = [] }) {
       frameMesh.position.set(slot.position[0], slot.position[1], slot.position[2])
       frameMesh.rotation.set(0, slot.rotation[1], 0)
       frameMesh.castShadow = true
+      frameMesh.renderOrder = 5
       scene.add(frameMesh)
 
-      const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide })
+      const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        side: THREE.DoubleSide,
+        depthTest: false,
+        depthWrite: false,
+        fog: false,
+        transparent: false,
+      })
       const mesh = new THREE.Mesh(imageGeometry, material)
-      mesh.position.set(slot.position[0], slot.position[1], slot.position[2] + 0.015 * (slot.position[0] > 0 ? -1 : 1))
+      const offset = slot.position[0] > 0 ? -0.05 : 0.05
+      mesh.position.set(slot.position[0], slot.position[1], slot.position[2] + offset)
       mesh.rotation.set(0, slot.rotation[1], 0)
       mesh.castShadow = true
+      mesh.frustumCulled = false
+      mesh.renderOrder = 10
       scene.add(mesh)
 
       let audio = null
-      const audioUrl = asset.story?.audioUrl || asset.audioUrl
-      if (audioUrl) {
-        audio = new Audio(audioUrl)
-        audio.loop = true
-        audio.crossOrigin = 'anonymous'
-        audio.volume = 0
-        audio.play().catch(() => {})
+      const audioUrl = asset.audioUrl || asset?.story?.audioUrl || asset?.audio?.url
+      const resolvedUrl = audioUrl
+        ? (audioUrl.startsWith('/') || audioUrl.startsWith('http') ? audioUrl : `/audio/${audioUrl}`)
+        : null
+      if (resolvedUrl) {
+        const cacheSafeUrl = applyCacheBust(resolvedUrl)
+        let needsCrossOrigin = false
+        if (cacheSafeUrl.startsWith('http')) {
+          try {
+            needsCrossOrigin = new URL(cacheSafeUrl).origin !== window.location.origin
+          } catch {
+            needsCrossOrigin = false
+          }
+        }
+
+        const audioLoader = new THREE.AudioLoader()
+        if (needsCrossOrigin) {
+          audioLoader.setCrossOrigin('anonymous')
+        }
+
+        audio = new THREE.PositionalAudio(listener)
+        audio.userData = { resolvedUrl: cacheSafeUrl, lastVolume: 0 }
+        audio.setLoop(true)
+        audio.setVolume(0)
+        audio.setRefDistance(NEAR_DIST)
+        audio.setMaxDistance(FAR_DIST + 6)
+        audio.setDistanceModel('linear')
+
+        const audioAnchor = new THREE.Object3D()
+        audioAnchor.name = `audio-anchor-${slot.id || index}`
+        mesh.add(audioAnchor)
+        audioAnchor.add(audio)
+
+        audioLoader.load(
+          cacheSafeUrl,
+          (buffer) => {
+            if (disposed || !buffer) return
+            audio.setBuffer(buffer)
+            console.log('[audio] buffer ready', resolvedUrl)
+            if (isLockedRef.current) {
+              tryPlayAudio(audio)
+            }
+          },
+          undefined,
+          (error) => {
+            console.warn('[audio] error', resolvedUrl, error)
+          },
+        )
+
         loadedAudios.push(audio)
         allAudiosRef.current.push(audio)
       }
@@ -264,12 +360,26 @@ function TunnelSandbox({ onExit, assets = [] }) {
     controls.addEventListener('lock', () => {
       setIsLocked(true)
       setInstructionsVisible(false)
-      allAudiosRef.current.forEach((audio) => audio?.play?.().catch(() => {}))
+      isLockedRef.current = true
+      const resumePromise = resumeAudioContext()
+      Promise.resolve(resumePromise).catch(() => {})
     })
     controls.addEventListener('unlock', () => {
       setIsLocked(false)
       setInstructionsVisible(true)
-      allAudiosRef.current.forEach((audio) => audio?.pause?.())
+      isLockedRef.current = false
+      allAudiosRef.current.forEach((audio) => {
+        if (!audio) return
+        if (audio.isPlaying) {
+          try {
+            audio.stop()
+            console.log('[audio] stop', audio.userData?.resolvedUrl || '(buffer)')
+          } catch {}
+        }
+        if (typeof audio.setVolume === 'function') {
+          audio.setVolume(0)
+        }
+      })
     })
     const rig = controls.getObject()
     scene.add(rig)
@@ -386,11 +496,25 @@ function TunnelSandbox({ onExit, assets = [] }) {
           const distance = mesh.position.distanceTo(rig.position)
           const tProx = THREE.MathUtils.clamp((FAR_DIST - distance) / (FAR_DIST - NEAR_DIST), 0, 1)
           const targetVol = Math.pow(tProx, 1.4) * MAX_AUDIO_VOL
-          audio.volume += (targetVol - audio.volume) * VOL_LERP
-          if (audio.volume <= 0.0001 && !audio.paused && distance > FAR_DIST) {
-            audio.pause()
-          } else if (audio.volume > 0.0001 && audio.paused) {
-            audio.play().catch(() => {})
+          const currentVolume = typeof audio.getVolume === 'function' ? audio.getVolume() : audio.userData?.lastVolume || 0
+          const nextVolume = currentVolume + (targetVol - currentVolume) * VOL_LERP
+          if (typeof audio.setVolume === 'function') {
+            audio.setVolume(nextVolume)
+          }
+          if (audio.userData) {
+            audio.userData.lastVolume = nextVolume
+          }
+
+          const START_THRESH = 0.35
+          const STOP_THRESH = 0.20
+          if (!audio.isPlaying && audio.buffer && tProx >= START_THRESH) {
+            tryPlayAudio(audio)
+          } else if (audio.isPlaying && tProx <= STOP_THRESH) {
+            try {
+              audio.stop()
+            } catch {}
+            if (typeof audio.setVolume === 'function') audio.setVolume(0)
+            if (audio.userData) audio.userData.lastVolume = 0
           }
         }
       })
@@ -402,6 +526,7 @@ function TunnelSandbox({ onExit, assets = [] }) {
     renderer.setAnimationLoop(animate)
 
     const dispose = () => {
+      disposed = true
       window.removeEventListener('resize', resize)
       document.removeEventListener('keydown', onKeyDown)
       document.removeEventListener('keyup', onKeyUp)
@@ -414,12 +539,21 @@ function TunnelSandbox({ onExit, assets = [] }) {
       bloomPass.dispose?.()
       pmrem.dispose?.()
       loadedAudios.forEach((audio) => {
-        try { audio.pause() } catch {}
+        if (!audio) return
+        try { audio.stop() } catch {}
+        try { audio.disconnect() } catch {}
       })
       allAudiosRef.current.forEach((audio) => {
-        try { audio.pause() } catch {}
+        if (!audio) return
+        try { audio.stop() } catch {}
+        try { audio.disconnect() } catch {}
       })
       allAudiosRef.current = []
+      listenerRef.current = null
+      try {
+        camera.remove(listener)
+      } catch {}
+      isLockedRef.current = false
       scene.traverse((child) => {
         if (child.isMesh) {
           child.geometry?.dispose?.()
@@ -434,7 +568,7 @@ function TunnelSandbox({ onExit, assets = [] }) {
     }
 
     return dispose
-  }, [slotBlueprint, assets])
+  }, [slotBlueprint, assets, tunnelId])
 
   return (
     <div className="sandbox-shell">
