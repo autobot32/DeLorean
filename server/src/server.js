@@ -212,6 +212,28 @@ app.post('/api/echo', (req, res) => {
   });
 });
 
+app.post('/api/story', async (req, res) => {
+  try {
+    const story = await summarizeMemories(req.body.memories || []);
+    res.json({ story });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Gemini request failed' });
+  }
+});
+
+app.post('/api/narrate', async (req, res) => {
+  try {
+    const story = await summarizeMemories(req.body.memories || []);
+    const audioPath = await synthesizeToFile(story, Date.now().toString());
+    res.json({ story, audio: `/audio/${path.basename(audioPath)}` });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Narration failed' });
+  }
+});
+
+
 app.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {
     return res.status(400).json({ error: error.message });
