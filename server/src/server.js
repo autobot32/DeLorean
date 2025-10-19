@@ -292,107 +292,134 @@ app.post('/api/tunnels/:tunnelId/commit', (req, res) => {
   res.json({ tunnelId, assets: Array.isArray(tunnel.assets) ? [...tunnel.assets] : [] });
 });
 
-app.post('/api/uploads', upload.array('images', 20), async (req, res, next) => {
-  if (!req.files || req.files.length === 0) {
-    return res.status(400).json({ error: 'No images received.' });
-  }
-
-  try {
-    const manifest = readStoredUploads();
-    const now = Date.now();
-    const createdEntries = [];
-    let orderCounter = manifest.length;
-    const contexts = parseContextField(req.body?.contexts ?? req.body?.context);
-
-    const normalizeToWebp = async (file) => {
-      const attempt = async (inputBuffer) =>
-        sharp(inputBuffer, { failOnError: false })
-          .rotate()
-          .webp({ quality: 90 })
-          .toBuffer({ resolveWithObject: true });
-
-      try {
-        return await attempt(file.buffer);
-      } catch (error) {
-        const isHeicMime =
-          ['image/heic', 'image/heif', 'image/heic-sequence'].includes(file.mimetype);
-        const ext = (path.extname(file.originalname) || '').toLowerCase();
-        const looksHeic = isHeicMime || ['.heic', '.heif'].includes(ext);
-
-        if (looksHeic) {
-          try {
-            const jpegBuffer = await heicConvert({
-              buffer: file.buffer,
-              format: 'JPEG',
-              quality: 0.95,
-            });
-            return await attempt(jpegBuffer);
-          } catch (heicError) {
-            throw new Error(
-              `Failed to convert HEIC image ${file.originalname}: ${heicError.message}`,
-            );
-          }
-        }
-
-        throw new Error(`Failed to process image ${file.originalname}: ${error.message}`);
-      }
-    };
-
-    for (let fileIndex = 0; fileIndex < req.files.length; fileIndex += 1) {
-      const file = req.files[fileIndex];
-      const timestamp = Date.now();
-      const randomSuffix = Math.round(Math.random() * 1e6);
-      const baseName =
-        path
-          .basename(file.originalname, path.extname(file.originalname))
-          .replace(/[^a-zA-Z0-9_-]/g, '')
-          .slice(0, 32) || 'image';
-      const filename = `${baseName}-${timestamp}-${randomSuffix}.webp`;
-      const targetPath = path.join(UPLOADS_DIR, filename);
-
-      const { data: webpBuffer, info } = await normalizeToWebp(file);
-      await fs.promises.writeFile(targetPath, webpBuffer);
-
-      const providedContext =
-        contexts[fileIndex] ?? contexts[createdEntries.length] ?? contexts[orderCounter] ?? null;
-      const context =
-        typeof providedContext === 'string' && providedContext.trim().length > 0
-          ? providedContext.trim()
-          : generatePlaceholderContext(orderCounter, file);
-
-      const record = {
-        id: randomUUID(),
-        originalName: file.originalname,
-        originalMimeType: file.mimetype,
-        mimeType: 'image/webp',
-        size: webpBuffer.length,
-        width: info?.width ?? null,
-        height: info?.height ?? null,
-        filename,
-        relativePath: `/uploads/${filename}`,
-        order: orderCounter++,
-        createdAt: now,
-        context,
-        story: createStoryState(context, { status: 'pending', updatedAt: now }),
-      };
-
-      manifest.push(record);
-      createdEntries.push({
-        ...record,
-        url: `${req.protocol}://${req.get('host')}${record.relativePath}`,
+app.post(
+  '/api/uploads',
+  (req, res, next) => {
+    const contentType = (req.headers['content-type'] || '').toLowerCase();
+    if (!contentType.startsWith('multipart/form-data')) {
+      console.warn('[uploads] Rejected non-multipart POST', {
+        method: req.method,
+        url: req.originalUrl,
+        contentType: req.headers['content-type'] || null,
+        ua: req.headers['user-agent'] || null,
+        origin: req.headers['origin'] || null,
       });
+      return res
+        .status(415)
+        .json({ error: 'Unsupported Media Type: expected multipart/form-data' });
+    }
+    return next();
+  },
+  upload.array('images', 20),
+  async (req, res, next) => {
+    console.log('[uploads] Received request', {
+      filesCount: Array.isArray(req.files) ? req.files.length : 0,
+      fields: Object.keys(req.body || {}),
+      contentType: req.headers['content-type'],
+    });
+
+    if (!req.files || req.files.length === 0) {
+      console.warn('[uploads] No images attached to multipart payload.');
+      return res.status(400).json({ error: 'No images received.' });
     }
 
-    writeStoredUploads(manifest);
+    try {
+      const manifest = readStoredUploads();
+      const now = Date.now();
+      const createdEntries = [];
+      let orderCounter = manifest.length;
+      const contexts = parseContextField(req.body?.contexts ?? req.body?.context);
 
-    return res.status(201).json({
-      assets: createdEntries,
-      stored: createdEntries,
-    });
-  } catch (error) {
-    return next(error);
-  }
-});
+      const normalizeToWebp = async (file) => {
+        const attempt = async (inputBuffer) =>
+          sharp(inputBuffer, { failOnError: false })
+            .rotate()
+            .webp({ quality: 90 })
+            .toBuffer({ resolveWithObject: true });
+
+        try {
+          return await attempt(file.buffer);
+        } catch (error) {
+          const isHeicMime =
+            ['image/heic', 'image/heif', 'image/heic-sequence'].includes(file.mimetype);
+          const ext = (path.extname(file.originalname) || '').toLowerCase();
+          const looksHeic = isHeicMime || ['.heic', '.heif'].includes(ext);
+
+          if (looksHeic) {
+            try {
+              const jpegBuffer = await heicConvert({
+                buffer: file.buffer,
+                format: 'JPEG',
+                quality: 0.95,
+              });
+              return await attempt(jpegBuffer);
+            } catch (heicError) {
+              throw new Error(
+                `Failed to convert HEIC image ${file.originalname}: ${heicError.message}`,
+              );
+            }
+          }
+
+          throw new Error(`Failed to process image ${file.originalname}: ${error.message}`);
+        }
+      };
+
+      for (let fileIndex = 0; fileIndex < req.files.length; fileIndex += 1) {
+        const file = req.files[fileIndex];
+        const timestamp = Date.now();
+        const randomSuffix = Math.round(Math.random() * 1e6);
+        const baseName =
+          path
+            .basename(file.originalname, path.extname(file.originalname))
+            .replace(/[^a-zA-Z0-9_-]/g, '')
+            .slice(0, 32) || 'image';
+        const filename = `${baseName}-${timestamp}-${randomSuffix}.webp`;
+        const targetPath = path.join(UPLOADS_DIR, filename);
+
+        const { data: webpBuffer, info } = await normalizeToWebp(file);
+        await fs.promises.writeFile(targetPath, webpBuffer);
+
+        const providedContext =
+          contexts[fileIndex] ?? contexts[createdEntries.length] ?? contexts[orderCounter] ?? null;
+        const context =
+          typeof providedContext === 'string' && providedContext.trim().length > 0
+            ? providedContext.trim()
+            : generatePlaceholderContext(orderCounter, file);
+
+        const record = {
+          id: randomUUID(),
+          originalName: file.originalname,
+          originalMimeType: file.mimetype,
+          mimeType: 'image/webp',
+          size: webpBuffer.length,
+          width: info?.width ?? null,
+          height: info?.height ?? null,
+          filename,
+          relativePath: `/uploads/${filename}`,
+          order: orderCounter++,
+          createdAt: now,
+          context,
+          story: createStoryState(context, { status: 'pending', updatedAt: now }),
+        };
+
+        manifest.push(record);
+        createdEntries.push({
+          ...record,
+          url: `${req.protocol}://${req.get('host')}${record.relativePath}`,
+        });
+      }
+
+      writeStoredUploads(manifest);
+
+      return res.status(201).json({
+        assets: createdEntries,
+        stored: createdEntries,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
 
 app.get('/api/uploads', (req, res) => {
   const manifest = readStoredUploads();

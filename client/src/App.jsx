@@ -1,5 +1,5 @@
 import TunnelSandbox from './three/TunnelSandbox'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 function App() {
   // Local-only state for previewing memories
@@ -20,6 +20,8 @@ function App() {
   })
   const fileInputRef = useRef(null)
   const pendingContextRef = useRef('')
+  const overlayTimeoutRef = useRef(null)
+  const overlayDelayRef = useRef(null)
   const [isDropping, setIsDropping] = useState(false)
   const [theme, setTheme] = useState('dark')
   const starCanvasRef = useRef(null)
@@ -38,8 +40,40 @@ function App() {
   const [storyText, setStoryText] = useState('')
   const [tunnelAssets, setTunnelAssets] = useState([])
   const [tunnelId, setTunnelId] = useState(null)
+  const [showLoading, setShowLoading] = useState(false)
+  const [loadingText, setLoadingText] = useState('Taking a trip down memory lane…')
+  const [overlayFading, setOverlayFading] = useState(false)
   const [draftBatch, setDraftBatch] = useState([]) // [{ id, file, objectUrl, name, lastModified, context }]
   const API_BASE = (import.meta?.env?.VITE_API_BASE || 'http://localhost:4000').replace(/\/$/,'')
+
+  useEffect(() => {
+    return () => {
+      if (overlayTimeoutRef.current) {
+        clearTimeout(overlayTimeoutRef.current)
+        overlayTimeoutRef.current = null
+      }
+      if (overlayDelayRef.current) {
+        clearTimeout(overlayDelayRef.current)
+        overlayDelayRef.current = null
+      }
+    }
+  }, [])
+
+  const hideOverlayWithFade = useCallback((ms = 500) => {
+    if (overlayTimeoutRef.current) {
+      clearTimeout(overlayTimeoutRef.current)
+    }
+    if (overlayDelayRef.current) {
+      clearTimeout(overlayDelayRef.current)
+      overlayDelayRef.current = null
+    }
+    setOverlayFading(true)
+    overlayTimeoutRef.current = window.setTimeout(() => {
+      setShowLoading(false)
+      setOverlayFading(false)
+      overlayTimeoutRef.current = null
+    }, ms)
+  }, [overlayDelayRef, overlayTimeoutRef])
 
   const ordinalLabel = (n) => {
     const suffixes = ['th', 'st', 'nd', 'rd']
@@ -489,6 +523,17 @@ function addFiles(files){
     if (!draftBatch.length) return
     let activeTunnelId = null
     try{
+      if (overlayTimeoutRef.current) {
+        clearTimeout(overlayTimeoutRef.current)
+        overlayTimeoutRef.current = null
+      }
+      if (overlayDelayRef.current) {
+        clearTimeout(overlayDelayRef.current)
+        overlayDelayRef.current = null
+      }
+      setLoadingText('Taking a trip down memory lane…')
+      setOverlayFading(false)
+      setShowLoading(true)
       setUploadError(null)
       setAnalyzeError(null)
       setIsUploading(true)
@@ -516,12 +561,14 @@ function addFiles(files){
       activeTunnelId = startedTunnelId
       setTunnelAssets([])
       setTunnelId(startedTunnelId)
+      setLoadingText('Packing memories…')
 
       const uploadRes = await fetch(`${API_BASE}/api/uploads`, { method: 'POST', body: form })
       if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`)
       const uploadData = await uploadRes.json()
       const uploaded = Array.isArray(uploadData.assets) ? uploadData.assets : []
       if (!uploaded.length) throw new Error('No assets were returned from the upload.')
+      setLoadingText('Spinning a story from your photos…')
 
       const itemsForStory = uploaded.map((asset, idx) => ({
         id: asset.id || asset.filename,
@@ -529,6 +576,7 @@ function addFiles(files){
       }))
 
       await analyzeAll(itemsForStory, { tunnelId: activeTunnelId })
+      setLoadingText('Recording narration…')
 
       setPrompts((prev) => {
         const base = { ...(prev || {}) }
@@ -571,7 +619,18 @@ function addFiles(files){
 
       setTunnelAssets(enriched)
       if (enriched.length) {
+        setLoadingText('Starting your experience…')
         window.location.hash = '#/experience'
+        if (overlayDelayRef.current) {
+          clearTimeout(overlayDelayRef.current)
+        }
+        overlayDelayRef.current = window.setTimeout(() => {
+          hideOverlayWithFade(600)
+          overlayDelayRef.current = null
+        }, 400)
+      } else {
+        setLoadingText('No new memories just yet.')
+        hideOverlayWithFade(400)
       }
 
       draftBatch.forEach((draft) => {
@@ -585,6 +644,8 @@ function addFiles(files){
       setUploadError(err.message || 'Upload failed')
       setTunnelAssets([])
       setTunnelId((prev) => (prev === activeTunnelId ? null : prev))
+      setLoadingText(err?.message || 'Something went wrong. Please try again.')
+      hideOverlayWithFade(400)
     }finally{
       setIsUploading(false)
       setIsAnalyzing(false)
@@ -593,16 +654,30 @@ function addFiles(files){
 
   if (page === 'experience') {
     return (
-      <TunnelSandbox
-        key={tunnelId || 'no-tunnel'}
-        tunnelId={tunnelId}
-        assets={tunnelAssets}
-        onExit={() => {
-          setTunnelAssets([])
-          setTunnelId(null)
-          window.location.hash = '#/memories'
-        }}
-      />
+      <>
+        <LoadingOverlay show={showLoading} fadingOut={overlayFading} text={loadingText} />
+        <TunnelSandbox
+          key={tunnelId || 'no-tunnel'}
+          tunnelId={tunnelId}
+          assets={tunnelAssets}
+          onExit={() => {
+            setTunnelAssets([])
+            setTunnelId(null)
+            setLoadingText('Taking a trip down memory lane…')
+            setOverlayFading(false)
+            if (overlayTimeoutRef.current) {
+              clearTimeout(overlayTimeoutRef.current)
+              overlayTimeoutRef.current = null
+            }
+            if (overlayDelayRef.current) {
+              clearTimeout(overlayDelayRef.current)
+              overlayDelayRef.current = null
+            }
+            setShowLoading(false)
+            window.location.hash = '#/memories'
+          }}
+        />
+      </>
     )
   }
 
@@ -894,10 +969,46 @@ function addFiles(files){
     </main>
   )
 
-  return mainView
+  return (
+    <>
+      <LoadingOverlay show={showLoading} fadingOut={overlayFading} text={loadingText} />
+      {mainView}
+    </>
+  )
 }
 
 export default App
+
+function LoadingOverlay({ show, fadingOut, text }) {
+  if (!show && !fadingOut) {
+    return null
+  }
+
+  const visibleText = text || 'Taking a trip down memory lane…'
+  const stateClasses = fadingOut ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'
+
+  return (
+    <div className={`fixed inset-0 z-[100] flex items-center justify-center overflow-hidden px-6 transition-opacity duration-500 ${stateClasses}`}>
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-950/95 via-indigo-900/90 to-slate-950/95" />
+      <div className="absolute -left-24 top-16 h-[36rem] w-[36rem] rounded-full bg-pink-500/25 blur-3xl animate-spin" style={{ animationDuration: '18s' }} aria-hidden />
+      <div className="absolute -right-20 bottom-24 h-[30rem] w-[30rem] rounded-full bg-cyan-400/20 blur-3xl animate-pulse" aria-hidden />
+      <div className="relative z-10 flex flex-col items-center gap-4 text-center text-white drop-shadow-lg" role="status" aria-live="polite">
+        <h2 className="text-2xl font-semibold tracking-wide sm:text-3xl">{visibleText}</h2>
+        <p className="text-sm text-slate-200/80 sm:text-base">Buckle in—dusting off snapshots and tuning the radio 📻</p>
+        <div className="mt-6 flex items-center gap-3">
+          {[0, 1, 2].map((dot) => (
+            <span
+              key={dot}
+              className="h-3 w-3 rounded-full bg-white/90 animate-bounce"
+              style={{ animationDelay: `${dot * 0.2}s` }}
+              aria-hidden
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function StepIcon({ number }){
   return (
