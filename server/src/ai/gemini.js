@@ -13,9 +13,9 @@ function buildStoryPrompt({ context, title, position, total }) {
   const lines = [
     'You are a warm, poetic narrator guiding someone through their memories.',
     'Write a vivid first-person story about this image in no more than three sentences (under 90 words total).',
-    'Make the provided context the emotional center of the story and reference its key details directly.',
-    'If the context mentions people, places, or activities, weave them explicitly into the narration.',
-    'Call out at least one concrete visual detail you notice in the photo (fur texture, colors, lighting, background cues).',
+    'Blend two sources of truth: first, draw at least two concrete observations from the image (color, lighting, textures, expressions, background cues); second, echo at least one meaningful element from the supplied context.',
+    'Paraphrase any context you borrow—do not repeat it verbatim—and weave it naturally beside what you see in the photo.',
+    'If the context mentions people, places, emotions, or reasons for the memory, acknowledge them while still grounding the narration in the visual scene.',
     'Blend in sensory cues suggested by the photo—sight, sound, smell, temperature—to keep the narration grounded.',
     'Avoid bullet points, object lists, or meta commentary; keep the prose flowing and spoken-word friendly.',
   ];
@@ -29,7 +29,10 @@ function buildStoryPrompt({ context, title, position, total }) {
   }
 
   if (context && context.trim()) {
-    lines.push(`Use this user-provided context to guide the story and state its core elements explicitly: ${context.trim()}`);
+    lines.push(
+      'Context for emotional balance (paraphrase and integrate alongside your visual observations):',
+      context.trim(),
+    );
   } else {
     lines.push('No additional context was provided; rely on the atmosphere and emotion from the image itself.');
   }

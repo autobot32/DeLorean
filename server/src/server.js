@@ -17,6 +17,7 @@ const allowedOrigins = CLIENT_ORIGIN.split(',').map((origin) => origin.trim()).f
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DATA_FILE = path.join(DATA_DIR, 'uploads.json');
+const SCENES_FILE = path.join(DATA_DIR, 'scenes.json');
 const PLACEHOLDER_CONTEXTS = [
   'A cherished moment layered with nostalgia and warmth.',
   'An adventure snapshot that still hums with excitement.',
@@ -37,6 +38,10 @@ function ensureDirectories() {
 
   if (!fs.existsSync(DATA_FILE)) {
     fs.writeFileSync(DATA_FILE, '[]', 'utf-8');
+  }
+
+  if (!fs.existsSync(SCENES_FILE)) {
+    fs.writeFileSync(SCENES_FILE, '[]', 'utf-8');
   }
 }
 
@@ -83,6 +88,24 @@ function writeStoredUploads(records) {
   }
 }
 
+function readScenes() {
+  try {
+    const raw = fs.readFileSync(SCENES_FILE, 'utf-8');
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error('Failed to read scenes manifest:', error);
+    return [];
+  }
+}
+
+function writeScenes(records) {
+  try {
+    fs.writeFileSync(SCENES_FILE, JSON.stringify(records, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('Failed to persist scenes manifest:', error);
+  }
+}
+
 function normalizeRecords(records = []) {
   return records.map((record, index) => normalizeRecord(record, index));
 }
@@ -125,7 +148,33 @@ function createStoryState(context, prior = {}) {
     updatedAt: typeof base.updatedAt === 'number' ? base.updatedAt : null,
     error: typeof base.error === 'string' ? base.error : null,
     contextHint: typeof base.contextHint === 'string' ? base.contextHint : context || null,
+    audio: normalizeAudioState(base.audio),
   };
+}
+
+function normalizeAudioState(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const audio = {
+    filename: typeof value.filename === 'string' ? value.filename : null,
+    relativePath: typeof value.relativePath === 'string' ? value.relativePath : null,
+    url: typeof value.url === 'string' ? value.url : null,
+    createdAt: typeof value.createdAt === 'number' ? value.createdAt : null,
+    error: typeof value.error === 'string' ? value.error : null,
+  };
+
+  const hasFile =
+    typeof audio.filename === 'string' ||
+    typeof audio.relativePath === 'string' ||
+    typeof audio.url === 'string';
+
+  if (!hasFile && !audio.error) {
+    return null;
+  }
+
+  return audio;
 }
 
 function parseContextField(raw) {
@@ -180,6 +229,36 @@ function withPublicUrl(record, req) {
   return {
     ...record,
     url: `${req.protocol}://${req.get('host')}${record.relativePath}`,
+  };
+}
+
+function decorateAudioMeta(audio, req) {
+  if (!audio || typeof audio !== 'object') {
+    return null;
+  }
+
+  const relativePath = typeof audio.relativePath === 'string' ? audio.relativePath : null;
+  const url =
+    typeof audio.url === 'string'
+      ? audio.url
+      : relativePath
+        ? `${req.protocol}://${req.get('host')}${relativePath}`
+        : null;
+
+  return {
+    ...audio,
+    url,
+  };
+}
+
+function decorateStory(story, req) {
+  if (!story || typeof story !== 'object') {
+    return story;
+  }
+
+  return {
+    ...story,
+    audio: decorateAudioMeta(story.audio, req),
   };
 }
 
@@ -326,17 +405,72 @@ app.post('/api/uploads/:id/story', async (req, res) => {
       ? req.body.context.trim()
       : null;
 
-  const context = overrideContext || record.context || null;
+  const priorContext =
+    typeof record.context === 'string' && record.context.trim().length > 0
+      ? record.context.trim()
+      : null;
+
+  const existingContext =
+    overrideContext ||
+    (priorContext && !priorContext.includes('— centered around') ? priorContext : null);
+
+  const contextParts = [];
+  if (overrideContext) {
+    contextParts.push(`User context: ${overrideContext}`);
+  }
+
+  if (priorContext) {
+    contextParts.push(`Baseline context: ${priorContext}`);
+  } else if (existingContext) {
+    contextParts.push(existingContext);
+  }
+
+  const fileReference = record.originalName
+    ? `Photo reference: ${record.originalName}`
+    : record.filename
+      ? `Photo reference: ${record.filename}`
+      : null;
+
+  if (
+    fileReference &&
+    !contextParts.some(
+      (value) =>
+        typeof value === 'string' &&
+        (record.originalName ? value.includes(record.originalName) : value.includes(record.filename)),
+    )
+  ) {
+    contextParts.push(fileReference);
+  }
+
+  if (record.width && record.height) {
+    contextParts.push(`Image dimensions: ${record.width}×${record.height}px`);
+  }
+
+  const context =
+    contextParts
+      .map((value) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : null))
+      .filter(Boolean)
+      .filter(
+        (value, index, arr) =>
+          arr.findIndex((candidate) => candidate.toLowerCase() === value.toLowerCase()) === index,
+      )
+      .join('\n') || null;
+
   const totalMemories = manifest.length;
   const position =
     typeof record.order === 'number' && !Number.isNaN(record.order)
       ? record.order
       : index;
 
-  if (!req.body?.force && record.story?.status === 'ready' && record.story.text) {
+  const shouldReuse =
+    !req.body?.force && !overrideContext && record.story?.status === 'ready' && record.story.text;
+
+  if (shouldReuse) {
+    const storyResponse = decorateStory(record.story, req);
     return res.json({
-      story: record.story,
+      story: storyResponse,
       asset: withPublicUrl(record, req),
+      audio: storyResponse?.audio || null,
       reused: true,
     });
   }
@@ -363,21 +497,80 @@ app.post('/api/uploads/:id/story', async (req, res) => {
       total: totalMemories,
     });
 
+    const now = Date.now();
     record.story = {
       status: 'ready',
       text,
       prompt,
-      updatedAt: Date.now(),
+      updatedAt: now,
       error: null,
       contextHint: context,
+      audio: null,
     };
+
+    let audioMeta = null;
+    let sceneRecord = null;
+
+    if (text && text.trim()) {
+      try {
+        const clipId = `${record.id}-${now}`;
+        const audioResult = await synthesizeToFile(text, clipId);
+        audioMeta = {
+          filename: audioResult.filename,
+          relativePath: audioResult.relativePath,
+          createdAt: Date.now(),
+        };
+        record.story.audio = audioMeta;
+
+        const scenes = readScenes();
+        const assetWithUrl = withPublicUrl(record, req);
+        sceneRecord = {
+          id: clipId,
+          story: text,
+          placeholder: false,
+          memories: context ? [context] : [],
+          assetIds: [record.id],
+          assets: [assetWithUrl],
+          audio: audioMeta,
+          createdAt: Date.now(),
+          source: 'single-photo',
+        };
+
+        scenes.push(sceneRecord);
+        writeScenes(scenes);
+      } catch (audioError) {
+        console.warn('[ElevenLabs] Audio generation failed', {
+          id: record.id,
+          filename: record.filename,
+          error: audioError?.message,
+        });
+        record.story.audio = {
+          error: audioError.message,
+          createdAt: Date.now(),
+        };
+      }
+    }
 
     manifest[index] = record;
     writeStoredUploads(manifest);
 
+    const storyResponse = decorateStory(record.story, req);
+    const sceneResponse = sceneRecord
+      ? {
+          ...sceneRecord,
+          assets: sceneRecord.assets.map((asset) => ({
+            ...asset,
+            url: `${req.protocol}://${req.get('host')}${asset.relativePath}`,
+          })),
+          audio: decorateAudioMeta(sceneRecord.audio, req),
+        }
+      : null;
+
     return res.json({
-      story: record.story,
+      story: storyResponse,
       asset: withPublicUrl(record, req),
+      audio: storyResponse?.audio || null,
+      scene: sceneResponse,
       reused: false,
     });
   } catch (error) {
@@ -478,6 +671,9 @@ app.post('/api/story', async (req, res) => {
 
 app.post('/api/narrate', async (req, res) => {
   const memories = Array.isArray(req.body?.memories) ? req.body.memories : [];
+  const assetIds = Array.isArray(req.body?.assetIds)
+    ? req.body.assetIds.filter((id) => typeof id === 'string' && id.trim().length > 0)
+    : [];
   const fallbackStory = 'Placeholder memory narrative coming soon.';
   let story = fallbackStory;
   let usedPlaceholder = true;
@@ -493,16 +689,125 @@ app.post('/api/narrate', async (req, res) => {
 
   try {
     const clipId = randomUUID();
-    const audioPath = await synthesizeToFile(story, clipId);
+    const audioMeta = await synthesizeToFile(story, clipId);
+    const uploads = readStoredUploads();
+    const assets = assetIds
+      .map((id) => uploads.find((item) => item.id === id))
+      .filter(Boolean)
+      .map((asset) => ({
+        id: asset.id,
+        originalName: asset.originalName,
+        relativePath: asset.relativePath,
+        mimeType: asset.mimeType,
+        url: `${req.protocol}://${req.get('host')}${asset.relativePath}`,
+      }));
+
+    const scenes = readScenes();
+    const audioRecord = {
+      filename: audioMeta.filename,
+      relativePath: audioMeta.relativePath,
+      createdAt: Date.now(),
+    };
+
+    let uploadsUpdated = false;
+    if (assetIds.length && uploads.length) {
+      const now = Date.now();
+      const promptNote = `Narration generated via /api/narrate at ${new Date(now).toISOString()}`;
+      for (const assetId of assetIds) {
+        const uploadIndex = uploads.findIndex((item) => item.id === assetId);
+        if (uploadIndex === -1) continue;
+        const uploadRecord = uploads[uploadIndex];
+        const combinedContext =
+          uploadRecord.context && uploadRecord.context.trim().length > 0
+            ? uploadRecord.context.trim()
+            : memories.length
+              ? memories.join('\n')
+              : null;
+
+        uploadRecord.story = {
+          status: 'ready',
+          text: story,
+          prompt: promptNote,
+          updatedAt: now,
+          error: null,
+          contextHint: combinedContext || uploadRecord.story?.contextHint || null,
+          audio: audioRecord,
+        };
+
+        uploads[uploadIndex] = uploadRecord;
+        uploadsUpdated = true;
+      }
+
+      if (uploadsUpdated) {
+        writeStoredUploads(uploads);
+      }
+    }
+
+    const sceneRecord = {
+      id: clipId,
+      story,
+      placeholder: usedPlaceholder,
+      memories,
+      assetIds: assets.map((asset) => asset.id),
+      assets,
+      audio: audioRecord,
+      createdAt: Date.now(),
+    };
+
+    scenes.push(sceneRecord);
+    writeScenes(scenes);
+
+    const sceneResponse = {
+      ...sceneRecord,
+      assets: sceneRecord.assets.map((asset) => ({
+        ...asset,
+        url: `${req.protocol}://${req.get('host')}${asset.relativePath}`,
+      })),
+      audio: decorateAudioMeta(sceneRecord.audio, req),
+    };
+
     return res.json({
       story,
-      audio: `/audio/${path.basename(audioPath)}`,
+      audio: audioMeta.relativePath,
       placeholder: usedPlaceholder,
+      scene: sceneResponse,
     });
   } catch (error) {
     console.error('Narration failed:', error);
     return res.status(500).json({ error: error.message || 'Narration failed.' });
   }
+});
+
+app.get('/api/scenes', (req, res) => {
+  const scenes = readScenes();
+  const decorated = scenes.map((scene) => {
+    const assets = Array.isArray(scene.assets)
+      ? scene.assets.map((asset) => ({
+          ...asset,
+          url:
+            typeof asset.relativePath === 'string'
+              ? `${req.protocol}://${req.get('host')}${asset.relativePath}`
+              : asset.url,
+        }))
+      : [];
+
+    const audio = scene.audio || {};
+    const audioUrl =
+      typeof audio.relativePath === 'string'
+        ? `${req.protocol}://${req.get('host')}${audio.relativePath}`
+        : audio.url;
+
+    return {
+      ...scene,
+      assets,
+      audio: {
+        ...audio,
+        url: audioUrl,
+      },
+    };
+  });
+
+  res.json({ scenes: decorated });
 });
 
 app.use((error, req, res, next) => {
