@@ -24,7 +24,12 @@ async function synthesizeToFile(text, id) {
     text,
     voice_settings: { stability: 0.3, similarity_boost: 0.7 },
   });
-  await fs.promises.writeFile(outPath, Buffer.from(await audioStream.arrayBuffer()));
+  const chunks = [];
+  for await (const chunk of audioStream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const audioBuffer = Buffer.concat(chunks);
+  await fs.promises.writeFile(outPath, audioBuffer);
   return outPath;
 }
 
