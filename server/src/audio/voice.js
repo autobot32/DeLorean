@@ -18,7 +18,8 @@ async function synthesizeToFile(text, id) {
 
   const audioDir = path.join(__dirname, '..', 'audio');
   await fs.promises.mkdir(audioDir, { recursive: true });
-  const outPath = path.join(__dirname, '..', 'audio', `${id}.mp3`);
+  const filename = `${id}.mp3`;
+  const outPath = path.join(audioDir, filename);
   const audioStream = await elevenLabs.textToSpeech.convert(VOICE_ID, {
     model_id: 'eleven_turbo_v2',
     text,
@@ -30,7 +31,11 @@ async function synthesizeToFile(text, id) {
   }
   const audioBuffer = Buffer.concat(chunks);
   await fs.promises.writeFile(outPath, audioBuffer);
-  return outPath;
+  return {
+    filePath: outPath,
+    filename,
+    relativePath: `/audio/${filename}`,
+  };
 }
 
 module.exports = { synthesizeToFile };
