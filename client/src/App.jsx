@@ -567,8 +567,13 @@ function App() {
       {page === 'create' && (
         <section id="create" className="rounded-2xl border border-slate-200/80 bg-white/80 p-6 backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/50">
           <h2 className="mb-3 text-xl font-semibold">Create New Pathway</h2>
-          <div className="mb-4 rounded-xl border border-cyan-400/30 bg-cyan-100/60 p-4 text-sm text-cyan-900 dark:border-cyan-400/30 dark:bg-cyan-900/20 dark:text-cyan-100">
-            <p className="m-0">1. Add a set of photos that belong to this pathway. 2. Give them context so the story generator can understand why the moment matters. 3. Visit the Memories tab later to review and analyze your saved pathway.</p>
+          <div className="mb-6 rounded-2xl border border-cyan-400/40 bg-gradient-to-br from-white/90 via-cyan-50/80 to-transparent p-5 text-sm text-slate-700 shadow-sm dark:border-cyan-400/30 dark:bg-gradient-to-br dark:from-slate-900/70 dark:via-cyan-900/40 dark:to-transparent dark:text-cyan-100">
+            <h3 className="mb-2 text-base font-semibold text-cyan-800 dark:text-cyan-100">How to craft a great pathway</h3>
+            <ul className="list-disc space-y-2 pl-5">
+              <li><strong>Upload your photos together</strong> so this pathway feels cohesive. You can drag &amp; drop or use the button below.</li>
+              <li><strong>Add a context summary</strong> before uploading. We’ll attach it to every photo so you can fine-tune details later.</li>
+              <li><strong>Review in Memories</strong> once you’re done. Analyze will turn your saved contexts into a narrative you can revisit anytime.</li>
+            </ul>
           </div>
 
           <div className="mb-4 flex flex-col gap-3">
