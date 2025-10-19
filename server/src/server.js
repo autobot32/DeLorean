@@ -5,6 +5,7 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const sharp = require('sharp');
+const heicConvert = require('heic-convert');
 
 const PORT = process.env.PORT || 4000;
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
@@ -79,38 +80,67 @@ app.post('/api/uploads', upload.array('images', 20), async (req, res, next) => {
     const manifest = readStoredUploads();
     const now = Date.now();
     const createdEntries = [];
+    let orderCounter = manifest.length;
+
+    const normalizeToWebp = async (file) => {
+      const attempt = async (inputBuffer) =>
+        sharp(inputBuffer, { failOnError: false })
+          .rotate()
+          .webp({ quality: 90 })
+          .toBuffer({ resolveWithObject: true });
+
+      try {
+        return await attempt(file.buffer);
+      } catch (error) {
+        const isHeicMime =
+          ['image/heic', 'image/heif', 'image/heic-sequence'].includes(file.mimetype);
+        const ext = (path.extname(file.originalname) || '').toLowerCase();
+        const looksHeic = isHeicMime || ['.heic', '.heif'].includes(ext);
+
+        if (looksHeic) {
+          try {
+            const jpegBuffer = await heicConvert({
+              buffer: file.buffer,
+              format: 'JPEG',
+              quality: 0.95,
+            });
+            return await attempt(jpegBuffer);
+          } catch (heicError) {
+            throw new Error(
+              `Failed to convert HEIC image ${file.originalname}: ${heicError.message}`,
+            );
+          }
+        }
+
+        throw new Error(`Failed to process image ${file.originalname}: ${error.message}`);
+      }
+    };
 
     for (const file of req.files) {
       const timestamp = Date.now();
       const randomSuffix = Math.round(Math.random() * 1e6);
-      const baseName = path
-        .basename(file.originalname, path.extname(file.originalname))
-        .replace(/[^a-zA-Z0-9_-]/g, '')
-        .slice(0, 32) || 'image';
+      const baseName =
+        path
+          .basename(file.originalname, path.extname(file.originalname))
+          .replace(/[^a-zA-Z0-9_-]/g, '')
+          .slice(0, 32) || 'image';
       const filename = `${baseName}-${timestamp}-${randomSuffix}.webp`;
       const targetPath = path.join(UPLOADS_DIR, filename);
 
-      let outputInfo;
-      try {
-        outputInfo = await sharp(file.buffer, { failOnError: false })
-          .rotate()
-          .webp({ quality: 90 })
-          .toFile(targetPath);
-      } catch (error) {
-        throw new Error(`Failed to process image ${file.originalname}: ${error.message}`);
-      }
+      const { data: webpBuffer, info } = await normalizeToWebp(file);
+      await fs.promises.writeFile(targetPath, webpBuffer);
 
       const record = {
         id: randomUUID(),
         originalName: file.originalname,
         originalMimeType: file.mimetype,
         mimeType: 'image/webp',
-        size: outputInfo.size,
-        width: outputInfo.width ?? null,
-        height: outputInfo.height ?? null,
+        size: webpBuffer.length,
+        width: info?.width ?? null,
+        height: info?.height ?? null,
         filename,
         relativePath: `/uploads/${filename}`,
-        order: manifest.length,
+        order: orderCounter++,
         createdAt: now,
       };
 
@@ -181,6 +211,28 @@ app.post('/api/echo', (req, res) => {
     received: req.body,
   });
 });
+
+app.post('/api/story', async (req, res) => {
+  try {
+    const story = await summarizeMemories(req.body.memories || []);
+    res.json({ story });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Gemini request failed' });
+  }
+});
+
+app.post('/api/narrate', async (req, res) => {
+  try {
+    const story = await summarizeMemories(req.body.memories || []);
+    const audioPath = await synthesizeToFile(story, Date.now().toString());
+    res.json({ story, audio: `/audio/${path.basename(audioPath)}` });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Narration failed' });
+  }
+});
+
 
 app.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {
