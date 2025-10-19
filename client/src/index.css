@@ -40,7 +40,7 @@ html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
   pointer-events: none;
   background: radial-gradient(circle, var(--sparkle-color, rgba(255,255,255,0.92)) 0%, rgba(255,255,255,0.08) 55%, transparent 75%);
   box-shadow:
-    0 0 8px var(--sparkle-glow, rgba(255,255,255,0.17)),
+    0 0 8px var(--sparkle-glow, rgba(255,255,255,0.18)),
     0 0 18px var(--sparkle-glow, rgba(255,255,255,0.14));
   mix-blend-mode: screen;
   opacity: var(--sparkle-min-opacity, 0.25);

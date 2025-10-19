@@ -15,18 +15,21 @@ const MAX_AUDIO_VOL = 0.65
 const NEAR_DIST = 2.2
 const FAR_DIST = 9.0
 const VOL_LERP = 0.12
+const FRONT_MARGIN_Z = 10
 
-function buildSlotPositions(baseSlots) {
-  return baseSlots.map((slot, index) => {
+function buildSlotPositions(baseSlots, count) {
+  const total = Math.max(1, count ?? baseSlots.length)
+  return Array.from({ length: total }, (_, index) => {
+    const template = baseSlots[index] || baseSlots[index % baseSlots.length] || {}
     const isLeft = index % 2 === 0
     const z = -14 - index * SLOT_SPACING
     const x = isLeft ? -3.2 : 3.2
     const rotationY = isLeft ? Math.PI / 2.15 : -Math.PI / 2.15
     return {
-      id: slot.id,
+      id: template.id || `slot-${String(index + 1).padStart(2, '0')}`,
       position: [x, 1.9, z],
       rotation: [0, rotationY, 0],
-      scale: [4.2, 3.2, 1],
+      scale: template.scale || [4.2, 3.2, 1],
     }
   })
 }
@@ -36,7 +39,7 @@ function loadTexture(url, loader) {
   return loader.load(href)
 }
 
-function TunnelSandbox({ onExit, assets = [], tunnelId }) {
+function TunnelSandbox({ onExit, assets = [], tunnelId, book = null }) {
   const canvasRef = useRef(null)
   const controlsRef = useRef(null)
   const [isLocked, setIsLocked] = useState(false)
@@ -52,7 +55,10 @@ function TunnelSandbox({ onExit, assets = [], tunnelId }) {
     return src.includes('?') ? `${src}&${token}` : `${src}?${token}`
   }
 
-  const slotBlueprint = useMemo(() => buildSlotPositions(DefaultTunnel.slots), [])
+  const slotBlueprint = useMemo(
+    () => buildSlotPositions(DefaultTunnel.slots, Math.max(assets.length, 1)),
+    [assets.length],
+  )
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -105,6 +111,20 @@ function TunnelSandbox({ onExit, assets = [], tunnelId }) {
         .catch(() => {})
     }
     let disposed = false
+    const bookUrl = book?.url ? applyCacheBust(book.url) : null
+    let isHoveringBook = false
+    let bookGroup = null
+    let bookCoreMesh = null
+    const interactiveMeshes = []
+    const activeAssets = Array.isArray(assets) ? assets.filter((asset) => asset?.url) : []
+    const effectiveSlotCount = Math.max(activeAssets.length, 1)
+    const lastSlotIndex = Math.max(0, Math.min(effectiveSlotCount - 1, slotBlueprint.length - 1))
+    const lastSlot = slotBlueprint[lastSlotIndex] || slotBlueprint[slotBlueprint.length - 1]
+    const lastSlotZ = lastSlot?.position?.[2] ?? -14
+    const BOOK_OFFSET = SLOT_SPACING * 1.6
+    const bookZPosition = lastSlotZ - BOOK_OFFSET
+    const pathLength = Math.max(60, Math.abs(bookZPosition) + FRONT_MARGIN_Z + 14)
+    const pathCenterZ = FRONT_MARGIN_Z - pathLength / 2
 
     const scene = new THREE.Scene()
     scene.background = new THREE.Color('#040712')
@@ -183,12 +203,12 @@ function TunnelSandbox({ onExit, assets = [], tunnelId }) {
       displacementScale: dispMap ? 0.012 : 0,
     })
 
-    const pathGeometry = new THREE.PlaneGeometry(4.6, 200, 200, 200)
+    const pathGeometry = new THREE.PlaneGeometry(4.6, pathLength, 200, 200)
     const uv2 = pathGeometry.attributes.uv.array.slice(0)
     pathGeometry.setAttribute('uv2', new THREE.BufferAttribute(uv2, 2))
     const path = new THREE.Mesh(pathGeometry, pathMaterial)
     path.rotation.x = -Math.PI / 2
-    path.position.set(0, 0, -90)
+    path.position.set(0, 0, pathCenterZ)
     path.receiveShadow = true
     scene.add(path)
 
@@ -198,9 +218,9 @@ function TunnelSandbox({ onExit, assets = [], tunnelId }) {
       transparent: true,
       opacity: 0.28,
     })
-    const edge = new THREE.Mesh(new THREE.PlaneGeometry(5.6, 200), edgeMaterial)
+    const edge = new THREE.Mesh(new THREE.PlaneGeometry(5.6, pathLength), edgeMaterial)
     edge.rotation.x = -Math.PI / 2
-    edge.position.set(0, 0.015, -90)
+    edge.position.set(0, 0.015, pathCenterZ)
     scene.add(edge)
 
     const fog = new THREE.FogExp2(0x050910, 0.012)
@@ -352,6 +372,89 @@ function TunnelSandbox({ onExit, assets = [], tunnelId }) {
       })
     })
 
+    if (bookUrl && activeAssets.length) {
+      bookGroup = new THREE.Group()
+      bookGroup.position.set(0, 1.62, bookZPosition)
+      bookGroup.rotation.set(THREE.MathUtils.degToRad(8), Math.PI, 0)
+
+      const coverMaterial = new THREE.MeshPhysicalMaterial({
+        color: 0xa31621,
+        emissive: 0x3f0610,
+        emissiveIntensity: 0.8,
+        roughness: 0.35,
+        metalness: 0.2,
+        clearcoat: 0.25,
+        clearcoatRoughness: 0.6,
+      })
+      const coverGeometry = new THREE.BoxGeometry(1.05, 1.45, 0.26)
+      const coverMesh = new THREE.Mesh(coverGeometry, coverMaterial)
+      coverMesh.castShadow = true
+      coverMesh.receiveShadow = true
+      coverMesh.name = 'tunnel-audiobook'
+      bookCoreMesh = coverMesh
+      bookGroup.add(coverMesh)
+
+      const pagesGeometry = new THREE.BoxGeometry(0.92, 1.32, 0.2)
+      const pagesMaterial = new THREE.MeshStandardMaterial({
+        color: 0xf5eee6,
+        roughness: 0.85,
+        metalness: 0.05,
+        emissive: 0x1f1a17,
+        emissiveIntensity: 0.08,
+      })
+      const pagesMesh = new THREE.Mesh(pagesGeometry, pagesMaterial)
+      pagesMesh.position.set(-0.02, 0, 0)
+      pagesMesh.castShadow = true
+      bookGroup.add(pagesMesh)
+
+      const spineGeometry = new THREE.BoxGeometry(0.14, 1.45, 0.27)
+      const spineMaterial = new THREE.MeshStandardMaterial({
+        color: 0x7d0e1a,
+        emissive: 0x2c0308,
+        emissiveIntensity: 0.6,
+        roughness: 0.4,
+        metalness: 0.25,
+      })
+      const spineMesh = new THREE.Mesh(spineGeometry, spineMaterial)
+      spineMesh.position.set(0.46, 0, 0.005)
+      spineMesh.castShadow = true
+      bookGroup.add(spineMesh)
+
+      const gildMaterial = new THREE.MeshStandardMaterial({
+        color: 0xfcd34d,
+        emissive: 0x6b4b00,
+        emissiveIntensity: 0.45,
+        roughness: 0.3,
+        metalness: 0.9,
+      })
+      const gildBand = new THREE.Mesh(new THREE.BoxGeometry(1.06, 0.08, 0.27), gildMaterial)
+      gildBand.position.set(0, 0.52, 0)
+      bookGroup.add(gildBand)
+
+      const bookmarkMaterial = new THREE.MeshStandardMaterial({
+        color: 0xf97316,
+        emissive: 0x612300,
+        emissiveIntensity: 0.35,
+        roughness: 0.4,
+      })
+      const bookmark = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.02), bookmarkMaterial)
+      bookmark.position.set(-0.12, -0.62, 0.09)
+      bookGroup.add(bookmark)
+
+      scene.add(bookGroup)
+      interactiveMeshes.push(bookCoreMesh)
+      floats.push({
+        mesh: bookGroup,
+        origin: bookGroup.position.clone(),
+        axis: new THREE.Vector3(0, 1, 0),
+        speed: 0.32,
+        phase: Math.random() * Math.PI * 2,
+        amplitude: 0.18,
+        audio: null,
+        isBook: true,
+      })
+    }
+
     const controls = new PointerLockControls(camera, renderer.domElement)
     controlsRef.current = controls
     controls.pointerSpeed = 0.6
@@ -361,6 +464,7 @@ function TunnelSandbox({ onExit, assets = [], tunnelId }) {
       setIsLocked(true)
       setInstructionsVisible(false)
       isLockedRef.current = true
+      canvas.style.cursor = 'none'
       const resumePromise = resumeAudioContext()
       Promise.resolve(resumePromise).catch(() => {})
     })
@@ -368,6 +472,7 @@ function TunnelSandbox({ onExit, assets = [], tunnelId }) {
       setIsLocked(false)
       setInstructionsVisible(true)
       isLockedRef.current = false
+      canvas.style.cursor = ''
       allAudiosRef.current.forEach((audio) => {
         if (!audio) return
         if (audio.isPlaying) {
@@ -389,6 +494,56 @@ function TunnelSandbox({ onExit, assets = [], tunnelId }) {
     const MAX_PITCH = Math.PI / 2 - 0.01
 
     rig.position.set(0, 1.8, -4)
+
+    const raycaster = new THREE.Raycaster()
+    const pointer = new THREE.Vector2()
+    const canvasEl = renderer.domElement
+
+    const triggerBookDownload = () => {
+      if (!bookUrl) return
+      const link = document.createElement('a')
+      link.href = bookUrl
+      link.download = 'Pathway_Audiobook.mp3'
+      link.rel = 'noopener'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    }
+
+    const handlePointerMove = (event) => {
+      if (!bookUrl || !bookCoreMesh || controls.isLocked) {
+        if (!controls.isLocked && canvasEl.style.cursor === 'pointer') {
+          canvasEl.style.cursor = ''
+        }
+        isHoveringBook = false
+        return
+      }
+      const rect = canvasEl.getBoundingClientRect()
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+      raycaster.setFromCamera(pointer, camera)
+      const intersections = raycaster.intersectObjects(interactiveMeshes, false)
+      const hovering = intersections.length > 0
+      canvasEl.style.cursor = hovering ? 'pointer' : ''
+      isHoveringBook = hovering
+    }
+
+    const handleBookClick = () => {
+      if (!bookUrl || !bookCoreMesh) return
+      if (controls.isLocked) {
+        if (!bookGroup) return
+        const distance = bookGroup.position.distanceTo(rig.position)
+        if (distance > 5) return
+      } else if (!isHoveringBook) {
+        return
+      }
+      triggerBookDownload()
+    }
+
+    if (bookUrl && bookCoreMesh) {
+      canvasEl.addEventListener('mousemove', handlePointerMove)
+      canvasEl.addEventListener('click', handleBookClick)
+    }
 
     const moveState = { forward: false, back: false, left: false, right: false }
     const onKeyDown = (event) => {
@@ -487,10 +642,17 @@ function TunnelSandbox({ onExit, assets = [], tunnelId }) {
       }
 
       floats.forEach((float) => {
-        const { mesh, origin, axis, speed, phase, amplitude, audio } = float
+        const { mesh, origin, axis, speed, phase, amplitude, audio, isBook } = float
         const t = elapsed * speed + phase
         const offset = axis.clone().multiplyScalar(Math.sin(t) * amplitude)
         mesh.position.copy(origin).add(offset)
+
+        if (isBook && bookGroup) {
+          // spin the whole book assembly, not just a single mesh
+          bookGroup.rotation.y += delta * 0.6
+          const pulse = 1 + 0.015 * Math.sin(t * 1.4)
+          bookGroup.scale.set(pulse, pulse, 1)
+        }
 
         if (audio) {
           const distance = mesh.position.distanceTo(rig.position)
@@ -554,6 +716,11 @@ function TunnelSandbox({ onExit, assets = [], tunnelId }) {
         camera.remove(listener)
       } catch {}
       isLockedRef.current = false
+      if (bookUrl && bookCoreMesh) {
+        canvasEl.removeEventListener('mousemove', handlePointerMove)
+        canvasEl.removeEventListener('click', handleBookClick)
+        canvasEl.style.cursor = ''
+      }
       scene.traverse((child) => {
         if (child.isMesh) {
           child.geometry?.dispose?.()
@@ -568,7 +735,7 @@ function TunnelSandbox({ onExit, assets = [], tunnelId }) {
     }
 
     return dispose
-  }, [slotBlueprint, assets, tunnelId])
+  }, [slotBlueprint, assets, tunnelId, book])
 
   return (
     <div className="sandbox-shell">

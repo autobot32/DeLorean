@@ -211,8 +211,48 @@ async function generateMemoryStory({ imagePath, mimeType = 'image/webp', context
   return { text, prompt };
 }
 
+async function composeAudiobookNarrative(stories, options = {}) {
+  if (!hasGeminiKey || !gemini) {
+    throw new Error('GEMINI_API_KEY is not configured on the server.');
+  }
+
+  const cleaned = Array.isArray(stories)
+    ? stories
+        .map((story) => (typeof story === 'string' ? story.trim() : ''))
+        .filter((story) => story.length > 0)
+    : [];
+
+  if (!cleaned.length) {
+    throw new Error('No stories provided to compose the audiobook narrative.');
+  }
+
+  const minutes = typeof options.minutes === 'number' && options.minutes > 0 ? options.minutes : 2;
+  const targetWords = Math.max(120, Math.min(260, Math.round(minutes * 135)));
+  const numberedMemories = cleaned.map((story, index) => `(${index + 1}) ${story}`).join('\n\n');
+  const prompt = `You are composing a single, cohesive first-person mini-audiobook from multiple short photo stories.\nMerge them into one flowing narrative with clear transitions, consistent voice, and a gentle arc that ends on a reflective beat.\n\nConstraints:\n- Keep it very concise: about ${targetWords} words in total (±10%).\n- Plain prose only: no headings, bullet points, scene labels, or meta comments.\n- Use vivid but economical language and avoid repeating the same phrasing.\n- Assume the listener is walking through a tunnel of memories; close with a quiet, satisfying note.\n\nSource snippets to weave together (paraphrase, do not list):\n---\n${numberedMemories}\n---`;
+
+  const response = await gemini.models.generateContent({
+    model: DEFAULT_MODEL,
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.75,
+      topP: 0.85,
+      topK: 40,
+      maxOutputTokens: 1024,
+    },
+  });
+
+  const text = extractText(response);
+  if (!text) {
+    throw new Error('Gemini returned an empty audiobook narrative.');
+  }
+
+  return text.trim();
+}
+
 module.exports = {
   hasGeminiKey,
   summarizeMemories,
   generateMemoryStory,
+  composeAudiobookNarrative,
 };
