@@ -12,9 +12,12 @@ const DEFAULT_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 function buildStoryPrompt({ context, title, position, total }) {
   const lines = [
     'You are a warm, poetic narrator guiding someone through their memories.',
-    'Write a vivid, 3-5 sentence first-person story about this image.',
-    'Lean into sensory details, emotions, and meaning. Do not list objects or give instructions.',
-    'Keep it concise, flowing, and suitable for spoken narration.',
+    'Write a vivid first-person story about this image in no more than three sentences (under 90 words total).',
+    'Make the provided context the emotional center of the story and reference its key details directly.',
+    'If the context mentions people, places, or activities, weave them explicitly into the narration.',
+    'Call out at least one concrete visual detail you notice in the photo (fur texture, colors, lighting, background cues).',
+    'Blend in sensory cues suggested by the photo—sight, sound, smell, temperature—to keep the narration grounded.',
+    'Avoid bullet points, object lists, or meta commentary; keep the prose flowing and spoken-word friendly.',
   ];
 
   if (typeof position === 'number' && typeof total === 'number') {
@@ -26,7 +29,7 @@ function buildStoryPrompt({ context, title, position, total }) {
   }
 
   if (context && context.trim()) {
-    lines.push(`Use this user-provided context to guide the story: ${context.trim()}`);
+    lines.push(`Use this user-provided context to guide the story and state its core elements explicitly: ${context.trim()}`);
   } else {
     lines.push('No additional context was provided; rely on the atmosphere and emotion from the image itself.');
   }
@@ -67,19 +70,82 @@ function extractText(response) {
   return '';
 }
 
+function normalizeMemories(memories) {
+  if (!Array.isArray(memories)) return [];
+
+  return memories
+    .map((memory, index) => {
+      if (memory === null || memory === undefined) {
+        return '';
+      }
+
+      if (typeof memory === 'string') {
+        return memory.trim();
+      }
+
+      if (typeof memory === 'object') {
+        const segments = [];
+
+        if (typeof memory.story?.text === 'string' && memory.story.text.trim()) {
+          segments.push(memory.story.text.trim());
+        }
+
+        if (typeof memory.context === 'string' && memory.context.trim()) {
+          segments.push(memory.context.trim());
+        }
+
+        if (typeof memory.title === 'string' && memory.title.trim()) {
+          segments.push(`Title: ${memory.title.trim()}`);
+        } else if (typeof memory.originalName === 'string' && memory.originalName.trim()) {
+          segments.push(`File: ${memory.originalName.trim()}`);
+        }
+
+        if (typeof memory.description === 'string' && memory.description.trim()) {
+          segments.push(memory.description.trim());
+        }
+
+        const combined = segments.join('. ').trim();
+        if (combined) {
+          return combined;
+        }
+      }
+
+      return '';
+    })
+    .map((entry) => entry.replace(/\s+/g, ' ').trim())
+    .filter((entry) => entry.length > 0);
+}
+
 async function summarizeMemories(memories) {
   if (!hasGeminiKey || !gemini) {
     throw new Error('GEMINI_API_KEY is not configured on the server.');
   }
 
-  const prompt = `Turn these memories into a short narrative:\n${memories.join('\n')}`;
+  const normalized = normalizeMemories(memories);
+  if (normalized.length === 0) {
+    const error = new Error('No memories provided to summarize.');
+    error.code = 'NO_MEMORIES';
+    throw error;
+  }
+
+  const bulletList = normalized.map((entry, index) => `${index + 1}. ${entry}`).join('\n');
+  const prompt = [
+    'You are delivering the closing narration for a memory tunnel experience.',
+    'Weave the following memory snippets into a cohesive 3-4 sentence monologue (under 130 words) that feels reflective, optimistic, and deeply personal.',
+    'Reference each listed memory directly, showing how they connect to a larger story.',
+    'Keep it first person, fluid, and ready for spoken narration.',
+    'Memories:',
+    bulletList,
+  ].join('\n');
   const res = await gemini.models.generateContent({
     model: DEFAULT_MODEL,
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
   });
   const summary = extractText(res);
   if (!summary) {
-    throw new Error('Gemini returned an empty summary.');
+    const error = new Error('Gemini returned an empty summary.');
+    error.code = 'EMPTY_SUMMARY';
+    throw error;
   }
   return summary;
 }

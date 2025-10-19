@@ -447,19 +447,32 @@ app.post('/api/echo', (req, res) => {
 });
 
 app.post('/api/story', async (req, res) => {
-  const memories = Array.isArray(req.body?.memories) ? req.body.memories : [];
-  const fallbackStory = 'Placeholder memory narrative coming soon.';
-
+  const memories = Array.isArray(req.body?.memories) ? req.body.memories : null;
   try {
-    if (!memories.length) {
-      return res.json({ story: fallbackStory, placeholder: true });
+    if (!memories || memories.length === 0) {
+      return res.status(400).json({ error: 'Provide an array of memories to summarize.' });
     }
 
     const story = await summarizeMemories(memories);
     return res.json({ story, placeholder: false });
   } catch (error) {
-    console.warn('Gemini request failed, returning placeholder story:', error);
-    return res.json({ story: fallbackStory, placeholder: true });
+    console.warn('[Gemini] Summary generation failed', {
+      error: error?.message,
+      code: error?.code,
+      stack: error?.stack,
+    });
+
+    if (error?.code === 'NO_MEMORIES') {
+      return res.status(400).json({ error: 'No memories provided to summarize.' });
+    }
+
+    if (error?.code === 'EMPTY_SUMMARY') {
+      return res
+        .status(502)
+        .json({ error: 'Gemini returned an empty summary. Try again or adjust memories.' });
+    }
+
+    return res.status(500).json({ error: 'Gemini request failed' });
   }
 });
 
