@@ -20,6 +20,9 @@ and at the end, those moments are woven into one continuous story about you.
 - **Server**: `cd server && npm install && npm run dev` (runs Express API on `http://localhost:4000`)
 - **Client**: `cd client && npm install && npm run dev` (runs Vite React app on `http://localhost:5173`)
 - Configure `CLIENT_ORIGIN` on the server if the frontend runs on a different URL
-- API routes: `POST /api/uploads`, `GET /api/uploads`, `DELETE /api/uploads/:id`, `GET /api/message`, `POST /api/echo`, `GET /health`
+- API routes: `POST /api/uploads`, `GET /api/uploads`, `POST /api/uploads/:id/story`, `DELETE /api/uploads/:id`, `GET /api/message`, `POST /api/echo`, `GET /health`
 - `POST /api/uploads` accepts `multipart/form-data` with `images` and optional `context`/`contexts` fields; responses include stored context + stub story metadata
+- `POST /api/uploads/:id/story` uses Gemini to craft a narrative for the specified memory (requires `GEMINI_API_KEY`)
+- `npm run dev` uses nodemon with `server/nodemon.json` so data/uploads/audio changes won’t restart the dev server
+- Configure `GEMINI_API_KEY` (and optional `GEMINI_MODEL`, default `gemini-2.5-flash`) in `server/.env`
 - Uploaded files (including HEIC/HEIF) are normalized to `.webp` via Sharp, saved under `/uploads`, and mirrored in `server/data/uploads.json`
