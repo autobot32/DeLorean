@@ -45,6 +45,29 @@ function App() {
   const [overlayFading, setOverlayFading] = useState(false)
   const [draftBatch, setDraftBatch] = useState([]) // [{ id, file, objectUrl, name, lastModified, context }]
   const API_BASE = (import.meta?.env?.VITE_API_BASE || 'http://localhost:4000').replace(/\/$/,'')
+  const sparkles = useMemo(() => {
+    const TOTAL = 68
+    return Array.from({ length: TOTAL }, (_, index) => {
+      const size = 1 + Math.random() * 2.2
+      const hue = 185 + Math.random() * 140
+      const saturation = 78 + Math.random() * 14
+      const lightness = 62 + Math.random() * 20
+      const maxOpacity = 0.35 + Math.random() * 0.35
+      const minOpacity = Math.max(0.14, maxOpacity - (0.18 + Math.random() * 0.2))
+      return {
+        id: `sparkle-${index}-${Math.random().toString(36).slice(2,7)}`,
+        left: Math.random() * 100,
+        top: Math.random() * 100,
+        size,
+        delay: Math.random() * 5.2,
+        duration: 4.5 + Math.random() * 4.5,
+        maxOpacity,
+        minOpacity,
+        color: `hsla(${hue}, ${saturation}%, ${lightness}%, 1)`,
+        glow: `hsla(${hue}, ${saturation}%, ${lightness}%, 0.26)`,
+      }
+    })
+  }, [])
 
   const hasMemories = useMemo(() => memories.some((m) => !!(m?.url || m?.objectUrl)), [memories])
 
@@ -691,6 +714,26 @@ function addFiles(files){
       <div aria-hidden className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
         {/* Starfield layer */}
         <canvas ref={starCanvasRef} className="absolute inset-0 h-full w-full"></canvas>
+        <div className="pointer-events-none absolute inset-0">
+          {sparkles.map((sparkle) => (
+            <span
+              key={sparkle.id}
+              className="sparkle-dot"
+              style={{
+                left: `${sparkle.left}%`,
+                top: `${sparkle.top}%`,
+                width: `${sparkle.size}px`,
+                height: `${sparkle.size}px`,
+                animationDelay: `${sparkle.delay}s`,
+                animationDuration: `${sparkle.duration}s`,
+                '--sparkle-base-opacity': sparkle.maxOpacity.toFixed(2),
+                '--sparkle-min-opacity': sparkle.minOpacity.toFixed(2),
+                '--sparkle-color': sparkle.color,
+                '--sparkle-glow': sparkle.glow,
+              }}
+            />
+          ))}
+        </div>
         <div className="animate-gradient-slow absolute -top-40 left-1/2 h-[55vh] w-[90vw] -translate-x-1/2 rounded-full opacity-40 blur-3xl bg-[linear-gradient(90deg,#00EAFF,45%,#FF3EC9,65%,#8A5CF6)] bg-[length:200%_200%]"></div>
         <div className="animate-float absolute bottom-[-8rem] left-[-8rem] h-[40vh] w-[40vh] rounded-full opacity-30 blur-3xl bg-[radial-gradient(circle_at_30%_30%,#8A5CF6,transparent_60%)]"></div>
         <div className="animate-float absolute right-[-6rem] top-[20%] h-[36vh] w-[36vh] rounded-full opacity-25 blur-3xl bg-[radial-gradient(circle_at_70%_70%,#00EAFF,transparent_60%)]"></div>
