@@ -7,6 +7,7 @@ function App() {
   const [isDropping, setIsDropping] = useState(false)
   const [theme, setTheme] = useState('dark')
   const starCanvasRef = useRef(null)
+  const memoriesStarRef = useRef(null)
   const [isUploading, setIsUploading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
   const API_BASE = (import.meta?.env?.VITE_API_BASE || 'http://localhost:4000').replace(/\/$/,'')
@@ -21,6 +22,69 @@ function App() {
     root.classList.toggle('dark', initial === 'dark')
   }, [])
 
+  // Starfield specifically behind the Memories section
+  useEffect(() => {
+    const canvas = memoriesStarRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    let rafId
+    let width = 0, height = 0, dpr = Math.min(window.devicePixelRatio || 1, 2)
+    const STAR_COUNT = 220
+    const stars = []
+
+    function resize(){
+      // canvas fills its section container
+      width = canvas.clientWidth
+      height = canvas.clientHeight
+      canvas.width = Math.floor(width * dpr)
+      canvas.height = Math.floor(height * dpr)
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    }
+
+    function initStars(){
+      stars.length = 0
+      for (let i = 0; i < STAR_COUNT; i++){
+        stars.push({
+          x: Math.random() * width,
+          y: Math.random() * height,
+          r: Math.random() * 1.3 + 0.5,
+          tw: Math.random() * Math.PI * 2,
+          sp: 0.06 + Math.random() * 0.28,
+          dx: -0.15 + Math.random() * 0.3,
+        })
+      }
+    }
+
+    function draw(){
+      ctx.clearRect(0, 0, width, height)
+      ctx.fillStyle = '#ffffff'
+      ctx.shadowColor = 'rgba(255,255,255,0.85)'
+      ctx.shadowBlur = 7
+      for (const s of stars){
+        const a = 0.65 + Math.sin(s.tw) * 0.45
+        ctx.globalAlpha = a
+        ctx.beginPath()
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2)
+        ctx.fill()
+        s.y -= s.sp
+        s.x += s.dx * 0.2
+        s.tw += 0.045 + s.sp * 0.02
+        if (s.y < -2){ s.y = height + 2; s.x = Math.random() * width }
+        if (s.x < -2){ s.x = width + 2 }
+        if (s.x > width + 2){ s.x = -2 }
+      }
+      ctx.globalAlpha = 1
+      ctx.shadowBlur = 0
+      rafId = requestAnimationFrame(draw)
+    }
+
+    const onResize = () => { resize(); initStars() }
+    resize(); initStars(); draw()
+    const ro = new ResizeObserver(onResize)
+    ro.observe(canvas)
+    window.addEventListener('resize', onResize)
+    return () => { cancelAnimationFrame(rafId); window.removeEventListener('resize', onResize); ro.disconnect() }
+  }, [])
   // Starfield background (space with white stars)
   useEffect(() => {
     const canvas = starCanvasRef.current
@@ -124,29 +188,32 @@ function App() {
   }, [])
 
   function sampleMemories(){
-    // Placeholder items (no images yet) to demonstrate the grid
+    // Placeholder items with blank text
     const seed = [
-      { id: 'm1', title: 'Graduation Day', meta: 'Jun 12, 2022' },
-      { id: 'm2', title: 'Road Trip West', meta: 'Aug 3, 2021' },
-      { id: 'm3', title: 'First Hackathon', meta: 'Oct 2020' },
-      { id: 'm4', title: 'Sunrise Hike', meta: 'May 2019' },
-      { id: 'm5', title: 'Family Reunion', meta: 'Dec 2019' },
-      { id: 'm6', title: 'City Lights', meta: 'Nov 2018' },
+      { id: 'm1', title: '', meta: '' },
+      { id: 'm2', title: '', meta: '' },
+      { id: 'm3', title: '', meta: '' },
+      { id: 'm4', title: '', meta: '' },
+      { id: 'm5', title: '', meta: '' },
+      { id: 'm6', title: '', meta: '' },
     ]
     return seed
   }
 
   function addFiles(files){
     const next = []
+    const tempIds = []
     for (const file of files){
       if (!file.type.startsWith('image/')) continue
       const objectUrl = URL.createObjectURL(file)
-      next.push({ id: `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2,7)}`, title: file.name, meta: new Date(file.lastModified).toLocaleDateString(), objectUrl })
+      const id = `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2,7)}`
+      tempIds.push(id)
+      next.push({ id, title: file.name, meta: new Date(file.lastModified).toLocaleDateString(), objectUrl })
     }
     if (next.length){
       setMemories(prev => [...next, ...prev])
-      // Fire and forget upload to server
-      uploadToServer(files)
+      // Upload then replace temps with server-backed entries
+      uploadToServer(files, tempIds)
     }
   }
 
@@ -181,6 +248,13 @@ function App() {
       if (item?.objectUrl) URL.revokeObjectURL(item.objectUrl)
       return prev.filter(m => m.id !== id)
     })
+
+    // Attempt to delete from server if this item exists there
+    const target = memories.find(m => m.id === id)
+    if (target?.id && target?.url) {
+      // fire-and-forget; UI updates immediately
+      fetch(`${API_BASE}/api/uploads/${encodeURIComponent(target.id)}`, { method: 'DELETE' }).catch(() => {})
+    }
   }
 
   function clearAll(){
@@ -190,7 +264,7 @@ function App() {
     })
   }
 
-  async function uploadToServer(fileList){
+  async function uploadToServer(fileList, tempIds = []){
     try{
       setUploadError(null)
       setIsUploading(true)
@@ -208,7 +282,18 @@ function App() {
       const data = await res.json()
       if (Array.isArray(data.assets)){
         const items = data.assets.map(a => ({ id: a.id || a.filename, title: a.originalName || a.filename, meta: new Date(a.createdAt || Date.now()).toLocaleDateString(), url: a.url }))
-        setMemories(prev => [...items, ...prev])
+        setMemories(prev => {
+          // Remove temporary previews we created for this batch
+          const toRemove = new Set(tempIds)
+          prev.filter(m => toRemove.has(m.id) && m.objectUrl).forEach(m => {
+            try { URL.revokeObjectURL(m.objectUrl) } catch {}
+          })
+          const filtered = prev.filter(m => !toRemove.has(m.id))
+          // De-duplicate by URL in case something already exists
+          const seenUrls = new Set(filtered.map(m => m.url).filter(Boolean))
+          const dedupItems = items.filter(it => !seenUrls.has(it.url))
+          return [...dedupItems, ...filtered]
+        })
       }
     }catch(err){
       setUploadError(err.message || 'Upload failed')
@@ -284,7 +369,13 @@ function App() {
         </ol>
       </section>
 
-      <section id="memories" className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/60">
+      <section id="memories" className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-transparent p-5 dark:border-slate-800/80">
+        {/* Starry space background just for this section */}
+        <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(20,28,60,0.9),transparent_70%)] dark:bg-[radial-gradient(ellipse_at_top,rgba(8,10,22,0.9),transparent_70%)]" />
+          <canvas ref={memoriesStarRef} className="absolute inset-0 h-full w-full"></canvas>
+          <div className="absolute inset-0 mix-blend-screen opacity-50" style={{background: 'radial-gradient(1200px 600px at 10% 10%, rgba(255,62,201,0.08), transparent 60%), radial-gradient(800px 400px at 90% 30%, rgba(0,234,255,0.08), transparent 60%)'}} />
+        </div>
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">Memories Preview</h2>
           <div className="flex gap-2">
@@ -294,12 +385,12 @@ function App() {
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {memories.map(m => (
-            <article key={m.id} className="overflow-hidden rounded-xl border border-slate-200/60 bg-white/90 shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/80">
-              <div className="relative aspect-[16/10] grid place-items-center bg-slate-100 dark:bg-slate-950/60" aria-label={m.title} role="img">
+            <article key={m.id} className="overflow-hidden rounded-xl border border-slate-200/60 bg-white/5 shadow-sm backdrop-blur-sm dark:border-slate-700/70 dark:bg-slate-900/20">
+              <div className="relative aspect-[16/10] grid place-items-center bg-black/20 dark:bg-black/30" aria-label={m.title} role="img">
                 {m.objectUrl || m.url ? (
                   <img className="h-full w-full object-cover" src={m.url || m.objectUrl} alt={m.title} />
                 ) : (
-                  <div className="h-[76%] w-[92%] rounded-lg border border-dashed border-pink-300/50 bg-gradient-to-br from-pink-50 to-cyan-50 dark:border-slate-700 dark:from-[#1a1d3a] dark:to-[#0f2440]" aria-hidden="true" />
+                  <div className="h-[76%] w-[92%] rounded-lg border border-dashed border-pink-300/50 bg-gradient-to-br from-white/10 to-white/5 dark:border-slate-600 dark:from-white/10 dark:to-transparent" aria-hidden="true" />
                 )}
                 <button className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-pink-300/60 bg-white/95 text-slate-900 hover:bg-white dark:border-pink-500 dark:bg-slate-900/80 dark:text-slate-100" onClick={() => removeMemory(m.id)} title="Remove">×</button>
               </div>
