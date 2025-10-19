@@ -4,3 +4,19 @@
 
 /* Optional: smooth font rendering */
 html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+/* Simple fade-in-up animation utilities */
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in-up { animation: fade-in-up 800ms ease-out both; }
+.delay-200 { animation-delay: 200ms; }
+.delay-300 { animation-delay: 300ms; }
+.delay-400 { animation-delay: 400ms; }
+.delay-500 { animation-delay: 500ms; }
+.delay-600 { animation-delay: 600ms; }
+.delay-700 { animation-delay: 700ms; }
+/* Scroll reveal utilities */
+.reveal { opacity: 0; transform: translateY(16px); transition: opacity 700ms ease-out, transform 700ms ease-out; will-change: opacity, transform; }
+.reveal.is-visible { opacity: 1; transform: translateY(0); }

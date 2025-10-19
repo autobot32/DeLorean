@@ -2,7 +2,21 @@ import { useEffect, useRef, useState } from 'react'
 
 function App() {
   // Local-only state for previewing memories
-  const [memories, setMemories] = useState(() => sampleMemories())
+  const LS_KEY = 'delorean_assets_v1'
+  const [memories, setMemories] = useState(() => {
+    try {
+      const cached = JSON.parse(localStorage.getItem(LS_KEY) || '[]')
+      if (Array.isArray(cached) && cached.length) {
+        return [
+          // server-backed assets restored from cache
+          ...cached.map(a => ({ id: a.id || a.filename || a.url, title: a.title || '', meta: a.meta || '', url: a.url })),
+          // placeholders for empty spots
+          ...sampleMemories(),
+        ]
+      }
+    } catch {}
+    return sampleMemories()
+  })
   const fileInputRef = useRef(null)
   const [isDropping, setIsDropping] = useState(false)
   const [theme, setTheme] = useState('dark')
@@ -10,6 +24,14 @@ function App() {
   const memoriesStarRef = useRef(null)
   const [isUploading, setIsUploading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
+  const [prompts, setPrompts] = useState(() => {
+    try{
+      const raw = localStorage.getItem('delorean_prompts_v1')
+      return raw ? JSON.parse(raw) || {} : {}
+    }catch{ return {} }
+  })
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [analyzeError, setAnalyzeError] = useState(null)
   const API_BASE = (import.meta?.env?.VITE_API_BASE || 'http://localhost:4000').replace(/\/$/,'')
 
   // Lightweight hash routing for three pages
@@ -34,6 +56,20 @@ function App() {
     setTheme(initial)
     root.classList.toggle('dark', initial === 'dark')
   }, [])
+
+  // Reveal-on-scroll for Welcome page sections
+  useEffect(() => {
+    if (page !== 'welcome') return
+    const targets = Array.from(document.querySelectorAll('#welcome .reveal'))
+    if (!targets.length) return
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) entry.target.classList.add('is-visible')
+      })
+    }, { threshold: 0.2, rootMargin: '0px 0px -10% 0px' })
+    targets.forEach(el => io.observe(el))
+    return () => io.disconnect()
+  }, [page])
 
   // Starfield specifically behind the Memories section
   useEffect(() => {
@@ -172,7 +208,6 @@ function App() {
         if(cancelled) return
         if (Array.isArray(data.assets)){
           const items = data.assets.map(a => ({ id: a.id || a.filename, title: a.originalName || a.filename, meta: new Date(a.createdAt || Date.now()).toLocaleDateString(), url: a.url }))
-          // Merge with any existing local previews (do not duplicate by url)
           setMemories(prev => {
             const seen = new Set(items.map(i => i.url))
             const filteredPrev = prev.filter(p => !p.url || !seen.has(p.url))
@@ -186,6 +221,18 @@ function App() {
     load()
     return () => { cancelled = true }
   }, [API_BASE])
+
+  // Persist server-backed assets so they survive refresh even if server is offline
+  useEffect(() => {
+    try {
+      const assets = memories.filter(m => !!m.url).map(m => ({ id: m.id, title: m.title || '', meta: m.meta || '', url: m.url }))
+      localStorage.setItem(LS_KEY, JSON.stringify(assets))
+    } catch {}
+  }, [memories])
+  // Persist prompts locally
+  useEffect(() => {
+    try { localStorage.setItem('delorean_prompts_v1', JSON.stringify(prompts || {})) } catch {}
+  }, [prompts])
 
   function toggleTheme(){
     const next = theme === 'dark' ? 'light' : 'dark'
@@ -268,12 +315,16 @@ function App() {
       // fire-and-forget; UI updates immediately
       fetch(`${API_BASE}/api/uploads/${encodeURIComponent(target.id)}`, { method: 'DELETE' }).catch(() => {})
     }
+    // drop any prompt for this id
+    setPrompts(prev => { const next = { ...(prev||{}) }; delete next[id]; return next })
   }
 
   function clearAll(){
     setMemories(prev => {
       prev.forEach(m => m.objectUrl && URL.revokeObjectURL(m.objectUrl))
-      return sampleMemories()
+      // keep server-backed items, drop local previews, and add placeholders
+      const keep = prev.filter(m => !!m.url)
+      return [...keep, ...sampleMemories()]
     })
   }
 
@@ -283,12 +334,20 @@ function App() {
       setIsUploading(true)
       const form = new FormData()
       let count = 0
+      const contexts = []
+      let i = 0
       for (const file of fileList){
         if (file.type?.startsWith('image/')){
           form.append('images', file)
           count++
+          const tid = tempIds?.[i]
+          const p = tid ? (prompts[tid] || '') : ''
+          contexts.push((p || '').trim())
+          i++
         }
       }
+      // Attach per-file contexts as an array aligned with images order
+      if (contexts.length) form.append('contexts', JSON.stringify(contexts))
       if (count === 0){ setIsUploading(false); return }
       const res = await fetch(`${API_BASE}/api/uploads`, { method: 'POST', body: form })
       if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
@@ -312,6 +371,26 @@ function App() {
       setUploadError(err.message || 'Upload failed')
     }finally{
       setIsUploading(false)
+    }
+  }
+
+  async function analyzeAll(){
+    try{
+      setAnalyzeError(null)
+      setIsAnalyzing(true)
+      const items = memories
+        .filter(m => m.id && prompts[m.id] && prompts[m.id].trim())
+        .map(m => ({ id: m.id, context: prompts[m.id].trim() }))
+      if (!items.length){ setIsAnalyzing(false); return }
+      // Use /api/story to process contexts
+      const res = await fetch(`${API_BASE}/api/story`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memories: items })
+      })
+      if (!res.ok) throw new Error(`Analyze failed: ${res.status}`)
+    }catch(err){
+      setAnalyzeError(err.message || 'Analyze failed')
+    }finally{
+      setIsAnalyzing(false)
     }
   }
 
@@ -348,26 +427,26 @@ function App() {
       {page === 'welcome' && (
         <section id="welcome" className="relative px-6 py-20 text-center space-y-16">
           {/* Big DeLorean title without a box */}
-          <h1 className="m-0 text-7xl sm:text-8xl font-extrabold leading-tight tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-neon-cyan via-neon-pink to-neon-violet">DeLorean</h1>
+          <h1 className="reveal m-0 text-8xl sm:text-9xl font-extrabold leading-tight tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-neon-cyan via-neon-pink to-neon-violet">DeLorean</h1>
 
           {/* Down arrow to Step Back Through Time */}
-          <div className="mt-16 flex justify-center">
+          <div className="reveal delay-200 mt-12 flex justify-center">
             <ArrowDown />
           </div>
 
           {/* Step Back Through Time section (no extra buttons) */}
-          <div id="step" className="mt-10 min-h-[60vh] flex flex-col items-center justify-center space-y-4">
+          <div id="step" className="reveal delay-300 mt-10 min-h-[60vh] flex flex-col items-center justify-center space-y-4">
             <h2 className="m-0 text-4xl sm:text-5xl font-bold">Step Back Through Time</h2>
             <p className="mx-auto mt-3 max-w-2xl text-lg text-slate-700 dark:text-slate-300">Build a pathway of your memories from the past to present.</p>
           </div>
 
           {/* Arrow to How It Works */}
-          <div className="mt-20 flex justify-center">
+          <div className="reveal delay-400 mt-14 flex justify-center">
             <ArrowDown />
           </div>
 
           {/* How It Works content inline on the welcome page */}
-          <div id="how" className="mt-10 min-h-[70vh] rounded-2xl border border-slate-200/80 bg-white/80 p-8 text-left backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/50">
+          <div id="how" className="reveal delay-500 mt-10 min-h-[70vh] rounded-2xl border border-slate-200/80 bg-white/80 p-8 text-left backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/50">
             <h3 className="mb-4 text-3xl sm:text-4xl font-semibold text-center">How It Works</h3>
             <ol className="grid gap-3 md:grid-cols-3" aria-label="How DeLorean works">
               <li className="flex items-start gap-3 rounded-xl border border-pink-300/30 bg-white/80 p-3 dark:border-pink-400/20 dark:bg-slate-900/70">
@@ -393,42 +472,16 @@ function App() {
               </li>
             </ol>
 
-            {/* More details about the site */}
-            <div className="mt-6 grid gap-4 md:grid-cols-3">
-              <div className="rounded-xl border border-cyan-400/30 bg-cyan-500/10 p-4 text-cyan-100">
-                <h4 className="m-0 mb-2 text-base font-semibold text-cyan-100">Features</h4>
-                <ul className="m-0 list-disc space-y-1 pl-5 text-sm text-cyan-50/90">
-                  <li>Add photos directly from each card with “Add Photo”.</li>
-                  <li>Instant on-device previews; no page reloads.</li>
-                  <li>Uploads are sent to the local API at {API_BASE} and appear in the grid.</li>
-                </ul>
-              </div>
-              <div className="rounded-xl border border-pink-400/30 bg-pink-500/10 p-4 text-pink-100">
-                <h4 className="m-0 mb-2 text-base font-semibold text-pink-100">Privacy & Control</h4>
-                <ul className="m-0 list-disc space-y-1 pl-5 text-sm text-pink-50/90">
-                  <li>Server runs locally; images are stored under <code className="text-pink-200">/uploads</code>.</li>
-                  <li>Use the “A-” button to remove an item; it also calls DELETE on the API.</li>
-                  <li>“Reset” restores placeholders without touching server files.</li>
-                </ul>
-              </div>
-              <div className="rounded-xl border border-indigo-400/30 bg-indigo-500/10 p-4 text-indigo-100">
-                <h4 className="m-0 mb-2 text-base font-semibold text-indigo-100">Compatibility & Tips</h4>
-                <ul className="m-0 list-disc space-y-1 pl-5 text-sm text-indigo-50/90">
-                  <li>Supports JPG, PNG, WEBP, and GIF (up to 10MB each).</li>
-                  <li>Works best in modern browsers; theme toggle is top-right.</li>
-                  <li>If the server is offline, previews still work; they sync when online.</li>
-                </ul>
-              </div>
-            </div>
+            
           </div>
 
           {/* Arrow to CTA */}
-          <div className="mt-20 flex justify-center">
+          <div className="reveal delay-400 mt-14 flex justify-center">
             <ArrowDown />
           </div>
 
           {/* Bottom CTA to Memories page */}
-          <div id="cta" className="mt-12 mb-24 min-h-[40vh] flex items-center justify-center">
+          <div id="cta" className="reveal delay-700 mt-12 mb-24 min-h-[40vh] flex items-center justify-center">
             <a className="animate-glow inline-flex items-center justify-center rounded-lg border border-pink-300/50 bg-gradient-to-r from-neon-pink via-neon-violet to-neon-cyan px-8 py-3 text-lg font-semibold text-white shadow-lg hover:ring-2 hover:ring-pink-300/40" href="#/memories">
               Create Your Pathway
             </a>
@@ -449,9 +502,18 @@ function App() {
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">Memories Preview</h2>
           <div className="flex gap-2">
+            <button
+              disabled={isAnalyzing || !memories.some(m => prompts[m.id]?.trim())}
+              onClick={analyzeAll}
+              className={`inline-flex items-center rounded-lg border px-3 py-2 text-sm font-semibold shadow-sm ${isAnalyzing ? 'opacity-70 cursor-wait' : ''} border-pink-300/40 bg-gradient-to-r from-neon-pink to-neon-violet text-white hover:ring-2 hover:ring-pink-300/30`}
+              title="Analyze context prompts"
+            >
+              {isAnalyzing ? 'Analyzing…' : 'Analyze'}
+            </button>
             <button className="inline-flex items-center rounded-lg border border-cyan-400/40 bg-cyan-100/60 px-3 py-2 text-sm font-semibold text-cyan-900 hover:ring-2 hover:ring-cyan-400/30 dark:border-cyan-400/30 dark:bg-cyan-900/20 dark:text-cyan-200" onClick={clearAll}>Reset</button>
           </div>
-          <input ref={fileInputRef} className="hidden" type="file" accept="image/*" multiple onChange={onFileChange} /></div>
+          <input ref={fileInputRef} className="hidden" type="file" accept="image/*" multiple onChange={onFileChange} />
+        </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {memories.map(m => (
             <article key={m.id} className="overflow-hidden rounded-xl border border-slate-200/60 bg-white/5 shadow-sm backdrop-blur-sm dark:border-slate-700/70 dark:bg-slate-900/20">
@@ -486,6 +548,15 @@ function App() {
                 <h4 className="m-0 max-w-[70%] truncate text-sm font-semibold" title={m.title}>{m.title}</h4>
                 {m.meta && <span className="text-xs text-slate-500 dark:text-slate-400">{m.meta}</span>}
               </div>
+              <div className="px-3 pb-3">
+                <input
+                  type="text"
+                  value={prompts[m.id] || ''}
+                  onChange={e => setPrompts(prev => ({ ...(prev||{}), [m.id]: e.target.value }))}
+                  placeholder="Add context (where/when/people, feelings, purpose)"
+                  className="w-full rounded-md border border-slate-300/70 bg-white/80 px-2 py-1.5 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-pink-300/40 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-100"
+                />
+              </div>
             </article>
           ))}
         </div>
@@ -513,9 +584,9 @@ function StepIcon({ number }){
 
 function ArrowDown(){
   return (
-    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-      <path d="M12 4v14" stroke="#9bd7ff" strokeWidth="1.8" strokeLinecap="round"/>
-      <path d="M7.5 13.5 12 18l4.5-4.5" stroke="#79e9ff" strokeWidth="1.8" strokeLinecap="round"/>
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+      <path d="M12 4v14" stroke="#9bd7ff" strokeWidth="2.2" strokeLinecap="round"/>
+      <path d="M7.5 13.5 12 18l4.5-4.5" stroke="#79e9ff" strokeWidth="2.2" strokeLinecap="round"/>
     </svg>
   )
 }
