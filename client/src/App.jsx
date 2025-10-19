@@ -32,6 +32,9 @@ function App() {
   })
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [analyzeError, setAnalyzeError] = useState(null)
+  const [storyText, setStoryText] = useState('')
+  const [storyAudio, setStoryAudio] = useState(null)
+  const [isNarrating, setIsNarrating] = useState(false)
   const API_BASE = (import.meta?.env?.VITE_API_BASE || 'http://localhost:4000').replace(/\/$/,'')
 
   // Lightweight hash routing for three pages
@@ -387,10 +390,34 @@ function App() {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memories: items })
       })
       if (!res.ok) throw new Error(`Analyze failed: ${res.status}`)
+      const data = await res.json()
+      setStoryText(typeof data.story === 'string' ? data.story : '')
+      setStoryAudio(null)
     }catch(err){
       setAnalyzeError(err.message || 'Analyze failed')
     }finally{
       setIsAnalyzing(false)
+    }
+  }
+
+  async function narrateAll(){
+    try{
+      setAnalyzeError(null)
+      setIsNarrating(true)
+      const items = memories
+        .filter(m => m.id && (prompts[m.id]?.trim() || storyText?.trim()))
+        .map(m => ({ id: m.id, context: (prompts[m.id] || '').trim() }))
+      const res = await fetch(`${API_BASE}/api/narrate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memories: items })
+      })
+      if (!res.ok) throw new Error(`Narrate failed: ${res.status}`)
+      const data = await res.json()
+      if (typeof data.story === 'string') setStoryText(data.story)
+      if (typeof data.audio === 'string') setStoryAudio(`${API_BASE}${data.audio}`)
+    }catch(err){
+      setAnalyzeError(err.message || 'Narration failed')
+    }finally{
+      setIsNarrating(false)
     }
   }
 
@@ -514,6 +541,20 @@ function App() {
           </div>
           <input ref={fileInputRef} className="hidden" type="file" accept="image/*" multiple onChange={onFileChange} />
         </div>
+        {(analyzeError || storyText) && (
+          <div className="mb-4 rounded-xl border border-slate-200/70 bg-white/80 p-4 backdrop-blur dark:border-slate-700 dark:bg-slate-900/50">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 className="m-0 text-base font-semibold">Generated Story</h3>
+              <button className="rounded-md border border-slate-300 px-2 py-1 text-xs dark:border-slate-600" onClick={() => { setStoryText(''); setAnalyzeError(null); }}>Clear</button>
+            </div>
+            {analyzeError && (
+              <div className="mb-2 rounded-md border border-pink-400/40 bg-pink-500/10 px-2 py-1 text-xs text-pink-100">{analyzeError}</div>
+            )}
+            {storyText && (
+              <div className="whitespace-pre-wrap text-sm text-slate-800 dark:text-slate-200">{storyText}</div>
+            )}
+          </div>
+        )}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {memories.map(m => (
             <article key={m.id} className="overflow-hidden rounded-xl border border-slate-200/60 bg-white/5 shadow-sm backdrop-blur-sm dark:border-slate-700/70 dark:bg-slate-900/20">
