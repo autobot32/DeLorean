@@ -1,6 +1,6 @@
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
-const { summarizeMemories } = require('./ai/gemini');
+const { summarizeMemories, generateMemoryStory, hasGeminiKey } = require('./ai/gemini');
 const { synthesizeToFile } = require('./audio/voice');
 
 const fs = require('fs');
@@ -97,12 +97,14 @@ function normalizeRecord(record, index) {
     };
   }
 
-  const context =
+  const rawContext =
     typeof record.context === 'string'
       ? record.context
       : record.context && typeof record.context.text === 'string'
         ? record.context.text
         : null;
+  const context =
+    typeof rawContext === 'string' && rawContext.trim().length > 0 ? rawContext.trim() : null;
 
   const storyState = createStoryState(context, record.story);
 
@@ -132,22 +134,24 @@ function parseContextField(raw) {
   }
 
   if (Array.isArray(raw)) {
-    return raw.map((value) => sanitizeContextValue(value));
+    return raw.map((value) => sanitizeContextValue(value)).filter((value) => value.length > 0);
   }
 
   if (typeof raw === 'string') {
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed.map((value) => sanitizeContextValue(value));
+        return parsed.map((value) => sanitizeContextValue(value)).filter((value) => value.length > 0);
       }
     } catch (error) {
       // treat raw as plain string
     }
-    return [sanitizeContextValue(raw)];
+    const single = sanitizeContextValue(raw);
+    return single ? [single] : [];
   }
 
-  return [sanitizeContextValue(raw)];
+  const fallback = sanitizeContextValue(raw);
+  return fallback ? [fallback] : [];
 }
 
 function sanitizeContextValue(value) {
@@ -169,6 +173,14 @@ function generatePlaceholderContext(position, file) {
   })();
 
   return `${template} — centered around "${baseName}".`;
+}
+
+function withPublicUrl(record, req) {
+  if (!record) return record;
+  return {
+    ...record,
+    url: `${req.protocol}://${req.get('host')}${record.relativePath}`,
+  };
 }
 
 app.get('/health', (req, res) => {
@@ -239,8 +251,8 @@ app.post('/api/uploads', upload.array('images', 20), async (req, res, next) => {
       const providedContext =
         contexts[fileIndex] ?? contexts[createdEntries.length] ?? contexts[orderCounter] ?? null;
       const context =
-        typeof providedContext === 'string' && providedContext.length > 0
-          ? providedContext
+        typeof providedContext === 'string' && providedContext.trim().length > 0
+          ? providedContext.trim()
           : generatePlaceholderContext(orderCounter, file);
 
       const record = {
@@ -284,6 +296,113 @@ app.get('/api/uploads', (req, res) => {
     url: `${req.protocol}://${req.get('host')}${record.relativePath}`,
   }));
   res.json({ assets });
+});
+
+app.post('/api/uploads/:id/story', async (req, res) => {
+  if (!hasGeminiKey) {
+    return res
+      .status(503)
+      .json({ error: 'Gemini API key is not configured on the server.' });
+  }
+
+  const manifest = readStoredUploads();
+  const index = manifest.findIndex((record) => record.id === req.params.id);
+
+  if (index === -1) {
+    return res.status(404).json({ error: 'Upload not found.' });
+  }
+
+  const record = manifest[index];
+  const imagePath = path.join(UPLOADS_DIR, record.filename);
+
+  try {
+    await fs.promises.access(imagePath, fs.constants.R_OK);
+  } catch (error) {
+    return res.status(410).json({ error: 'Image file is missing on the server.' });
+  }
+
+  const overrideContext =
+    typeof req.body?.context === 'string' && req.body.context.trim().length > 0
+      ? req.body.context.trim()
+      : null;
+
+  const context = overrideContext || record.context || null;
+  const totalMemories = manifest.length;
+  const position =
+    typeof record.order === 'number' && !Number.isNaN(record.order)
+      ? record.order
+      : index;
+
+  if (!req.body?.force && record.story?.status === 'ready' && record.story.text) {
+    return res.json({
+      story: record.story,
+      asset: withPublicUrl(record, req),
+      reused: true,
+    });
+  }
+
+  record.context = context;
+  record.story = createStoryState(context, { status: 'processing', updatedAt: Date.now() });
+  writeStoredUploads(manifest);
+
+  try {
+    console.log('[Gemini] Generating story', {
+      id: record.id,
+      filename: record.filename,
+      context,
+      position,
+      totalMemories,
+    });
+
+    const { text, prompt } = await generateMemoryStory({
+      imagePath,
+      mimeType: record.mimeType || 'image/webp',
+      context,
+      title: record.originalName,
+      position,
+      total: totalMemories,
+    });
+
+    record.story = {
+      status: 'ready',
+      text,
+      prompt,
+      updatedAt: Date.now(),
+      error: null,
+      contextHint: context,
+    };
+
+    manifest[index] = record;
+    writeStoredUploads(manifest);
+
+    return res.json({
+      story: record.story,
+      asset: withPublicUrl(record, req),
+      reused: false,
+    });
+  } catch (error) {
+    console.error('[Gemini] Story generation failed', {
+      id: record.id,
+      filename: record.filename,
+      context,
+      error: error?.message,
+      stack: error?.stack,
+    });
+    record.story = {
+      ...(record.story || {}),
+      status: 'error',
+      error: error.message,
+      updatedAt: Date.now(),
+      contextHint: context || record.story?.contextHint || null,
+    };
+    manifest[index] = record;
+    writeStoredUploads(manifest);
+
+    return res.status(502).json({
+      error: 'Failed to generate story with Gemini.',
+      details: error.message,
+    });
+  }
 });
 
 app.delete('/api/uploads/:id', (req, res) => {
