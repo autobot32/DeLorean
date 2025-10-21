@@ -25,9 +25,9 @@ Built in 24 hours at the University of Washington's DubHacks 2025 hackathon, DeL
 
 ## Screenshots
 
-![Landing page UI](DeLoreanDemo/Screenshot%202025-10-20%20at%205.22.12%E2%80%AFPM.png)
-![Add memories workflow](DeLoreanDemo/Screenshot%202025-10-20%20at%205.24.57%E2%80%AFPM.png)
-![Three.js tunnel walkthrough](DeLoreanDemo/Screenshot%202025-10-20%20at%205.22.37%E2%80%AFPM.png)
+![Landing page UI](docs/images/landing.png)
+![Add memories workflow](docs/images/upload-flow.png)
+![Three.js tunnel walkthrough](docs/images/tunnel.png)
 
 ---
 
