@@ -1,28 +1,83 @@
-# DeLorean
+# DeLorean · DubHacks 2025
 
-A virtual memory exhibit that lets you walk through your past in 3D.
-
-DeLorean builds an interactive **Three.js tunnel** stitched together from your uploaded photos.  
-As you move through the tunnel, an **AI voice** narrates the story behind each memory —  
-and at the end, those moments are woven into one continuous story about you.
+Built in 24 hours at the University of Washington's DubHacks 2025 hackathon, DeLorean is a virtual memory exhibit that lets you walk through your past in 3D. Drop in the photos that defined your year, step into a procedurally generated tunnel, and listen as an AI narrator strings those snapshots into a single story.
 
 ---
 
-### 🚀 Features
+## Hackathon Highlights
 
-- Upload personal images to build a 3D memory tunnel
-- AI narration for each photo using text-to-speech
-- Seamless camera walkthrough with smooth transitions
-- Final “life story” audio automatically generated from all memories
+- **Theme fit**: We set out to explore the hackathon theme of "time travel through lived experience" by recreating the feeling of paging through an old photo album.
+- **Team roles**: Atakan Toprakbasti and Azib Malik built the server-side APIs, while Stefano Cipolla crafted the website front end and Three.js client experience.
+- **What we finished in time**: Full upload workflow, automated asset conversion, generative narration, and a guided memory replay that worked on the demo stage.
+- **What we would add post-hackathon**: Multi-user memory sharing, collaborative timelines, and mobile AR mode for on-the-go nostalgia.
 
-### 🛠 Local Dev Setup
+---
 
-- **Server**: `cd server && npm install && npm run dev` (runs Express API on `http://localhost:4000`)
-- **Client**: `cd client && npm install && npm run dev` (runs Vite React app on `http://localhost:5173`)
-- Configure `CLIENT_ORIGIN` on the server if the frontend runs on a different URL
-- API routes: `POST /api/uploads`, `GET /api/uploads`, `POST /api/uploads/:id/story`, `DELETE /api/uploads/:id`, `GET /api/message`, `POST /api/echo`, `GET /health`
-- `POST /api/uploads` accepts `multipart/form-data` with `images` and optional `context`/`contexts` fields; responses include stored context + stub story metadata
-- `POST /api/uploads/:id/story` uses Gemini to craft a narrative for the specified memory (requires `GEMINI_API_KEY`)
-- `npm run dev` uses nodemon with `server/nodemon.json` so data/uploads/audio changes won’t restart the dev server
-- Configure `GEMINI_API_KEY` (and optional `GEMINI_MODEL`, default `gemini-2.5-flash`) in `server/.env`
-- Uploaded files (including HEIC/HEIF) are normalized to `.webp` via Sharp, saved under `/uploads`, and mirrored in `server/data/uploads.json`
+## Features
+
+- Upload personal images to build a 3D memory tunnel rendered in Three.js.
+- Auto-normalize image formats (including HEIC/HEIF) to WebP for smooth playback.
+- AI narration for each photo, including a final stitched "life story" voiceover.
+- Seamless camera walkthrough with ambient audio and timing synced to narration.
+- Real-time progress feedback so demo judges know when narration is ready.
+
+---
+
+## System Overview
+
+| Layer   | Tech | Responsibilities |
+|---------|------|------------------|
+| Client  | React + Vite, Three.js | Upload UI, tunnel renderer, animation timing, narration playback |
+| Server  | Node.js + Express      | File uploads, Sharp image processing, Gemini prompt orchestration |
+| AI      | Google Gemini          | Per-memory narration and final story synthesis (configurable model) |
+
+Uploaded assets live under `server/uploads`, with metadata tracked in `server/data/uploads.json`. Narrative audio is generated on demand and streamed back to the client.
+
+---
+
+## Getting Started Locally
+
+1. Clone the repo and install dependencies in both workspaces.
+   - `cd server && npm install`
+   - `cd client && npm install`
+2. Provision a Google Gemini API key (or reuse an existing one) and add it to `server/.env`:
+
+   ```env
+   GEMINI_API_KEY=your-key-here
+   GEMINI_MODEL=gemini-2.5-flash # optional override
+   CLIENT_ORIGIN=http://localhost:5173 # optional if the frontend serves elsewhere
+   ```
+
+3. Run the services in separate terminals:
+   - Server: `cd server && npm run dev` (Express on `http://localhost:4000`)
+   - Client: `cd client && npm run dev` (Vite on `http://localhost:5173`)
+4. Open the client, upload a set of memories, and wait for the automated narration to finish generating before stepping through the tunnel.
+
+---
+
+## API Notes
+
+- `POST /api/uploads` accepts `multipart/form-data` with `images` plus optional `context` or `contexts` text. It responds with stored context and stub narration metadata.
+- `GET /api/uploads` returns the current gallery for the session.
+- `POST /api/uploads/:id/story` triggers Gemini narration for the specified memory.
+- `DELETE /api/uploads/:id` removes a memory and its generated media.
+- `GET /api/message`, `POST /api/echo`, and `GET /health` provide diagnostics the team used during the hackathon.
+
+---
+
+## Tech Stack
+
+- Frontend: React, Vite, Three.js, Zustand, Tailwind CSS
+- Backend: Node.js, Express, Multer, Sharp
+- AI Services: Google Gemini (text + audio)
+- Tooling: Nodemon, ESLint, Prettier
+
+---
+
+## Credits
+
+- Atakan Toprakbasti — Backend engineering, upload pipeline, hackathon caffeine logistics
+- Azib Malik — Backend engineering, AI orchestration, narration tooling
+- Stefano Cipolla — Website frontend and 3D experience, user storytelling flow
+
+Built collaboratively over a single DubHacks 2025 weekend. Big thanks to the University of Washington organizers, mentors, and the late-night Red Bull stash that kept us shipping.
