@@ -19,6 +19,7 @@ Built in 24 hours at the University of Washington's DubHacks 2025 hackathon, DeL
 - Auto-normalize image formats (including HEIC/HEIF) to WebP for smooth playback.
 - AI narration for each photo, including a final stitched "life story" voiceover.
 - Seamless camera walkthrough with ambient audio and timing synced to narration.
+- Curated memory book at the end of the tunnel that bundles every story, lets you click the cover, and downloads the full narrative locally.
 - Real-time progress feedback so demo judges know when narration is ready.
 
 ---
