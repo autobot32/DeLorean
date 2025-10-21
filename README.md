@@ -23,13 +23,21 @@ Built in 24 hours at the University of Washington's DubHacks 2025 hackathon, DeL
 
 ---
 
+## Screenshots
+
+![Landing page UI](DeLoreanDemo/Screenshot%202025-10-20%20at%205.22.12%E2%80%AFPM.png)
+![Add memories workflow](DeLoreanDemo/Screenshot%202025-10-20%20at%205.24.57%E2%80%AFPM.png)
+![Three.js tunnel walkthrough](DeLoreanDemo/Screenshot%202025-10-20%20at%205.22.37%E2%80%AFPM.png)
+
+---
+
 ## System Overview
 
-| Layer   | Tech | Responsibilities |
-|---------|------|------------------|
-| Client  | React + Vite, Three.js | Upload UI, tunnel renderer, animation timing, narration playback |
-| Server  | Node.js + Express      | File uploads, Sharp image processing, Gemini prompt orchestration |
-| AI      | Google Gemini          | Per-memory narration and final story synthesis (configurable model) |
+| Layer  | Tech                   | Responsibilities                                                    |
+| ------ | ---------------------- | ------------------------------------------------------------------- |
+| Client | React + Vite, Three.js | Upload UI, tunnel renderer, animation timing, narration playback    |
+| Server | Node.js + Express      | File uploads, Sharp image processing, Gemini prompt orchestration   |
+| AI     | Google Gemini          | Per-memory narration and final story synthesis (configurable model) |
 
 Uploaded assets live under `server/uploads`, with metadata tracked in `server/data/uploads.json`. Narrative audio is generated on demand and streamed back to the client.
 
