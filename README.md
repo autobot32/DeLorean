@@ -1,6 +1,6 @@
 # DeLorean · DubHacks 2025
 
-Built in 24 hours at the University of Washington's DubHacks 2025 hackathon, DeLorean is a virtual memory exhibit that lets you walk through your past in 3D. Drop in the photos that defined your year, step into a procedurally generated tunnel, and listen as an AI narrator strings those snapshots into a single story.
+Built in 24 hours at the University of Washington's DubHacks 2025 hackathon, DeLorean is a virtual memory exhibit that lets you walk through your past in 3D. Drop in the photos that defined your year, step into a procedurally generated tunnel, and listen as an AI narrator strings those snapshots into a single story using ElevenLabs voice synthesis.
 
 ---
 
@@ -17,7 +17,7 @@ Built in 24 hours at the University of Washington's DubHacks 2025 hackathon, DeL
 
 - Upload personal images to build a 3D memory tunnel rendered in Three.js.
 - Auto-normalize image formats (including HEIC/HEIF) to WebP for smooth playback.
-- AI narration for each photo, including a final stitched "life story" voiceover.
+- AI narration for each photo—Gemini drafts the script, ElevenLabs voices it—including a final stitched "life story" voiceover.
 - Seamless camera walkthrough with ambient audio and timing synced to narration.
 - Curated memory book at the end of the tunnel that bundles every story, lets you click the cover, and downloads the full narrative locally.
 - Real-time progress feedback so demo judges know when narration is ready.
@@ -38,9 +38,9 @@ Built in 24 hours at the University of Washington's DubHacks 2025 hackathon, DeL
 | ------ | ---------------------- | ------------------------------------------------------------------- |
 | Client | React + Vite, Three.js | Upload UI, tunnel renderer, animation timing, narration playback    |
 | Server | Node.js + Express      | File uploads, Sharp image processing, Gemini prompt orchestration   |
-| AI     | Google Gemini          | Per-memory narration and final story synthesis (configurable model) |
+| AI     | Google Gemini + ElevenLabs | Gemini handles per-memory and final-story text; ElevenLabs renders the voiceover audio |
 
-Uploaded assets live under `server/uploads`, with metadata tracked in `server/data/uploads.json`. Narrative audio is generated on demand and streamed back to the client.
+Uploaded assets live under `server/uploads`, with metadata tracked in `server/data/uploads.json`. Narrative audio is generated on demand via ElevenLabs and streamed back to the client.
 
 ---
 
@@ -49,11 +49,13 @@ Uploaded assets live under `server/uploads`, with metadata tracked in `server/da
 1. Clone the repo and install dependencies in both workspaces.
    - `cd server && npm install`
    - `cd client && npm install`
-2. Provision a Google Gemini API key (or reuse an existing one) and add it to `server/.env`:
+2. Provision Google Gemini and ElevenLabs API keys (or reuse existing ones) and add them to `server/.env`:
 
    ```env
    GEMINI_API_KEY=your-key-here
    GEMINI_MODEL=gemini-2.5-flash # optional override
+   ELEVENLABS_API_KEY=your-elevenlabs-key
+   ELEVENLABS_VOICE_ID=voice-id # optional if you want a custom voice
    CLIENT_ORIGIN=http://localhost:5173 # optional if the frontend serves elsewhere
    ```
 
@@ -78,7 +80,7 @@ Uploaded assets live under `server/uploads`, with metadata tracked in `server/da
 
 - Frontend: React, Vite, Three.js, Zustand, Tailwind CSS
 - Backend: Node.js, Express, Multer, Sharp
-- AI Services: Google Gemini (text + audio)
+- AI Services: Google Gemini (story generation), ElevenLabs (text-to-speech)
 - Tooling: Nodemon, ESLint, Prettier
 
 ---
